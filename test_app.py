@@ -924,6 +924,11 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertIn("Giảm lỗ chuyển kỳ sau", labels)
         self.assertIn("MIN(ABS(", labels["Giảm lỗ chuyển kỳ sau"])
 
+        # Kiểm tra tuyệt đối không tô màu nền trên BaoCao_BienBan để copy thẳng vào Biên bản Word
+        for r in range(1, ws_rep.max_row + 1):
+            for c in range(1, 9):
+                self.assertIsNone(ws_rep.cell(r, c).fill.fill_type)
+
 
 if __name__ == "__main__":
     unittest.main()

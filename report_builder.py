@@ -140,30 +140,30 @@ def add_audit_report_sheet(
     ws = wb.create_sheet(title=sheet_name)
     ws.views.sheetView[0].showGridLines = True
 
-    # ===== STYLES =====
+    # ===== STYLES (Thuần đen-trắng, không tô màu nền để copy trực tiếp vào Biên bản Word) =====
     FONT_NAME = "Times New Roman"
-    f_title = Font(name=FONT_NAME, size=13, bold=True, color="1F4E78")
-    f_subtitle = Font(name=FONT_NAME, size=10, italic=True, color="444444")
-    f_sec = Font(name=FONT_NAME, size=11, bold=True, color="1F4E78")
-    f_hdr = Font(name=FONT_NAME, size=10, bold=True, color="FFFFFF")
-    f_hdr_code = Font(name=FONT_NAME, size=9, italic=True, color="1F4E78")
-    f_reg = Font(name=FONT_NAME, size=10)
-    f_bold = Font(name=FONT_NAME, size=10, bold=True)
-    f_italic = Font(name=FONT_NAME, size=10, italic=True)
+    f_title = Font(name=FONT_NAME, size=13, bold=True, color="000000")
+    f_subtitle = Font(name=FONT_NAME, size=10, italic=True, color="000000")
+    f_sec = Font(name=FONT_NAME, size=11, bold=True, color="000000")
+    f_hdr = Font(name=FONT_NAME, size=10, bold=True, color="000000")
+    f_hdr_code = Font(name=FONT_NAME, size=10, italic=True, color="000000")
+    f_reg = Font(name=FONT_NAME, size=10, color="000000")
+    f_bold = Font(name=FONT_NAME, size=10, bold=True, color="000000")
+    f_italic = Font(name=FONT_NAME, size=10, italic=True, color="000000")
     f_total = Font(name=FONT_NAME, size=10, bold=True, color="000000")
-    f_grand = Font(name=FONT_NAME, size=11, bold=True, color="FFFFFF")
+    f_grand = Font(name=FONT_NAME, size=11, bold=True, color="000000")
 
-    fill_hdr = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-    fill_code = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-    fill_sub = PatternFill(start_color="EEF4FA", end_color="EEF4FA", fill_type="solid")
-    fill_total = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-    fill_grand = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-    fill_input = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    fill_none = PatternFill(fill_type=None)
+    fill_hdr = fill_none
+    fill_code = fill_none
+    fill_sub = fill_none
+    fill_total = fill_none
+    fill_grand = fill_none
+    fill_input = fill_none
 
-    thin = Side(style="thin", color="808080")
-    med = Side(style="medium", color="1F4E78")
+    thin = Side(style="thin", color="000000")
     b_thin = Border(left=thin, right=thin, top=thin, bottom=thin)
-    b_hdr = Border(left=thin, right=thin, top=med, bottom=med)
+    b_hdr = b_thin
 
     al_c = Alignment(horizontal="center", vertical="center", wrap_text=True)
     al_l = Alignment(horizontal="left", vertical="center", wrap_text=True)
