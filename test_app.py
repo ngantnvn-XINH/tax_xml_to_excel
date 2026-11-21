@@ -682,6 +682,33 @@ class TestTaxXmlToExcel(unittest.TestCase):
         tndn_close = round(m["opening_exact"]["1052"] + sum(m["tndn_tk_qt_by_ky"].values()) - sum(m["tndn_c2_by_ht"].values()))
         self.assertEqual(tndn_close, -12081620)
 
+    def test_qhns_lpmb_reconciliation(self) -> None:
+        """Kiểm thử đối chiếu Quan hệ ngân sách cho Lệ phí môn bài (2862, 2863, 2864)."""
+        from qhns_summarizer import compute_tq_metrics
+
+        tq_rows = [
+            # Kỳ trước (2019) hạch toán muộn trong 2024 và nộp năm 2024
+            {"ky": "19CN", "ky_year": 2019, "gd": "TK", "tm": "2862", "so_tien": 3000000.0, "ht_year": 2024, "no_co": ""},
+            {"ky": "19CN", "ky_year": 2019, "gd": "C2", "tm": "2862", "so_tien": -3000000.0, "ht_year": 2024, "no_co": ""},
+            # Năm 2023: Bậc 1 (2862: 3tr) + Chi nhánh (2864: 1tr), đã nộp đủ 4tr
+            {"ky": "23CN", "ky_year": 2023, "gd": "TK", "tm": "2862", "so_tien": 3000000.0, "ht_year": 2023, "no_co": ""},
+            {"ky": "23CN", "ky_year": 2023, "gd": "TK", "tm": "2864", "so_tien": 1000000.0, "ht_year": 2023, "no_co": ""},
+            {"ky": "23CN", "ky_year": 2023, "gd": "C2", "tm": "2862", "so_tien": -3000000.0, "ht_year": 2023, "no_co": ""},
+            {"ky": "23CN", "ky_year": 2023, "gd": "C2", "tm": "2864", "so_tien": -1000000.0, "ht_year": 2023, "no_co": ""},
+            # Năm 2024: Bậc 2 (2863: 2tr), nộp nhầm 1tr rồi hủy/điều chỉnh +1tr -> còn nợ 2tr
+            {"ky": "24CN", "ky_year": 2024, "gd": "TK", "tm": "2863", "so_tien": 2000000.0, "ht_year": 2024, "no_co": ""},
+            {"ky": "24CN", "ky_year": 2024, "gd": "C2", "tm": "2863", "so_tien": -1000000.0, "ht_year": 2024, "no_co": ""},
+            {"ky": "24CN", "ky_year": 2024, "gd": "C2", "tm": "2863", "so_tien": 1000000.0, "ht_year": 2024, "no_co": ""},
+        ]
+        m = compute_tq_metrics(tq_rows, 2023, 2024)
+        self.assertEqual(round(m["opening_exact"]["LPMB"]), 3000000)
+        self.assertEqual(round(m["lpmb_ps_by_ky"][2023]), 4000000)
+        self.assertEqual(round(m["lpmb_c2_by_ht"][2023]), 4000000)
+        self.assertEqual(round(m["lpmb_ps_by_ky"][2024]), 2000000)
+        self.assertEqual(round(m["lpmb_c2_by_ht"][2024]), 3000000)
+        lpmb_close = round(m["opening_exact"]["LPMB"] + sum(m["lpmb_ps_by_ky"].values()) - sum(m["lpmb_c2_by_ht"].values()))
+        self.assertEqual(lpmb_close, 2000000)
+
 
 if __name__ == "__main__":
     unittest.main()

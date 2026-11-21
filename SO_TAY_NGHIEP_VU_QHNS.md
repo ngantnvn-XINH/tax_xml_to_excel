@@ -83,3 +83,7 @@ Số đầu kỳ của giai đoạn kiểm tra (`2020–2025`) bao gồm toàn b
    - **Nhóm B (Số đã nộp / Hoàn trả trong kỳ kiểm tra `start_year..end_year`):** `C2`, `HC`, `NT`, **`C5` (Lệnh hoàn KBT thu NS — ghi âm giảm số nộp)** theo năm Ngày hạch toán, bảo toàn dấu đại số.
    - **Nhóm C (Số kỳ trước chuyển sang = Dư đầu kỳ `start_year`):** Toàn bộ giao dịch khác `BT` của tiểu mục không thuộc Nhóm A & B (và không vượt quá `end_year`), bao gồm số nộp thừa/còn nợ lũy kế từ các năm trước (`< start_year`), các tờ khai/QĐ truy thu kỳ trước hạch toán muộn (`1901 TK`, `15CN QT`), và các cặp `PT`/`QH` bù trừ hoàn.
    - Khi tách ra cột thuyết minh `H` & `I` của năm đầu tiên, luôn giữ `H + I = Tổng Nhóm C` để đảm bảo **Dư cuối kỳ `QHNS` khớp tuyệt đối 0 đồng chênh lệch với Sổ Tổng Quan (`TQ`)** cho cả 3 sắc thuế (GTGT, TNDN, TNCN).
+
+3. **Đối chiếu Lệ phí môn bài trên biểu `QHNS` (Dòng `5 | Lệ phí môn bài`):**
+   - Bao quát đầy đủ các tiểu mục LPMB theo Mục lục NSNN: **`2862`** (Bậc 1 – 3 triệu), **`2863`** (Bậc 2 – 2 triệu), **`2864`** (Bậc 3 / chi nhánh, ĐĐKD – 1 triệu) và các tiểu mục cũ `1801`–`1804`.
+   - Áp dụng đồng nhất công thức phân hoạch 3 nhóm A/B/C: Phát sinh (`TK/TQ/QT` theo năm Kỳ báo cáo), Đã nộp (`C2/HC/NT/C5` theo Năm Ngày hạch toán), và Đầu kỳ (`opening_exact["LPMB"]`), kèm Comment thuyết minh chi tiết từng tiểu mục.

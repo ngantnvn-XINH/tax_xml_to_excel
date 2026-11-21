@@ -141,6 +141,8 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
     prev_year = start_year - 1
     prev_yy = str(prev_year)[-2:]
 
+    LPMB_TMS = ("2862", "2863", "2864", "1801", "1802", "1803", "1804")
+
     metrics: Dict[str, Any] = {
         "gtgt_tk_by_ky": {y: 0.0 for y in years},
         "gtgt_c2_by_ht": {y: 0.0 for y in years},
@@ -148,6 +150,10 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         "tndn_c2_by_ht": {y: 0.0 for y in years},
         "tncn_tk_th_tq_by_ky": {y: 0.0 for y in years},
         "tncn_c2_by_ht": {y: 0.0 for y in years},
+        "lpmb_ps_by_ky": {y: 0.0 for y in years},
+        "lpmb_c2_by_ht": {y: 0.0 for y in years},
+        "lpmb_ps_detail": defaultdict(lambda: defaultdict(float)),
+        "lpmb_nop_detail": defaultdict(lambda: defaultdict(float)),
         # Đầu kỳ năm start_year
         "dk_gtgt_qt_truoc": 0.0,
         "dk_gtgt_qt_notes": [],
@@ -159,8 +165,9 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         "dk_tncn_c2_notes": [],
         "dk_tncn_qt_prev": 0.0,
         "dk_tncn_qt_notes": [],
+        "dk_lpmb_notes": [],
         # Số dư đầu kỳ chính xác tuyệt đối tại 01/01/start_year theo phương pháp phân hoạch Sổ TQ
-        "opening_exact": {"1701": 0.0, "1052": 0.0, "1001": 0.0},
+        "opening_exact": {"1701": 0.0, "1052": 0.0, "1001": 0.0, "LPMB": 0.0},
         # Phát hiện kỳ thiếu TK trên TQ (có C2 nhưng không có TK)
         "tncn_tk_periods": defaultdict(set),
         "tncn_c2_periods": defaultdict(set),
@@ -232,6 +239,8 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                     metrics["dk_tndn_h"] += abs(val)
                 elif gd == "C2" and ky_y == prev_year:
                     metrics["dk_tndn_i"] += payment_amount(item)
+            elif tm in LPMB_TMS and gd in ("TK", "TQ", "QT"):
+                metrics["dk_lpmb_notes"].append(f"TM {tm} ({ky}): {val:,.0f}")
 
         # 2. Phát sinh theo Năm Kỳ báo cáo (Bucket A)
         in_bucket_a = False
@@ -249,6 +258,10 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                 in_bucket_a = True
                 if gd == "TK" and ky:
                     metrics["tncn_tk_periods"][ky_y].add(ky)
+            elif tm in LPMB_TMS and gd in ("TK", "TQ", "QT"):
+                metrics["lpmb_ps_by_ky"][ky_y] += val
+                metrics["lpmb_ps_detail"][ky_y][tm] += val
+                in_bucket_a = True
 
             if tm == "1701" and gd == "C2" and ky:
                 metrics["gtgt_c2_periods"][ky_y].add(ky)
@@ -274,15 +287,22 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                 in_bucket_b = True
                 if gd in ("HC", "NT", "C5"):
                     metrics.setdefault("special_nop_notes", defaultdict(list))[("1001", ht_y)].append(f"{gd}: {p_amt:,.0f}")
+            elif tm in LPMB_TMS:
+                metrics["lpmb_c2_by_ht"][ht_y] += p_amt
+                metrics["lpmb_nop_detail"][ht_y][tm] += p_amt
+                in_bucket_b = True
+                if gd in ("HC", "NT", "C5"):
+                    metrics.setdefault("special_nop_notes", defaultdict(list))[("LPMB", ht_y)].append(f"{gd}({tm}): {p_amt:,.0f}")
 
         # 4. Bucket C: Toàn bộ giao dịch kỳ trước chuyển sang (không thuộc Bucket A & B và không vượt quá end_year)
-        if tm in ("1701", "1052", "1001") and not in_bucket_a and not in_bucket_b:
+        bucket_c_key = tm if tm in ("1701", "1052", "1001") else ("LPMB" if tm in LPMB_TMS else None)
+        if bucket_c_key is not None and not in_bucket_a and not in_bucket_b:
             if gd in payment_gds:
                 if ht_y < start_year:
-                    metrics["opening_exact"][tm] += ledger_signed_amount(item)
+                    metrics["opening_exact"][bucket_c_key] += ledger_signed_amount(item)
             else:
                 if (ky_y is not None and ky_y < start_year) or (ky_y in years and ht_y <= end_year):
-                    metrics["opening_exact"][tm] += ledger_signed_amount(item)
+                    metrics["opening_exact"][bucket_c_key] += ledger_signed_amount(item)
 
     return metrics
 
@@ -632,7 +652,7 @@ def integrate_tq_and_qhns_into_workbook(
         r_year = cur_r
         cur_r += 1
 
-        # 7 dòng sắc thuế của năm
+        # 8 dòng sắc thuế của năm
         rows_spec = [
             ("gtgt", "1", "Thuế GTGT"),
             ("gtgt_vl", "", "Thuế GTGT vãng lai"),
@@ -641,6 +661,7 @@ def integrate_tq_and_qhns_into_workbook(
             ("nt_tong", "4", "Thuế nhà thầu"),
             ("nt_gtgt", "", "Trong đó:\n+ Thuế GTGT"),
             ("nt_tndn", "", "+ Thuế TNDN"),
+            ("lpmb", "5", "Lệ phí môn bài"),
         ]
         this_rows: Dict[str, int] = {}
         for key, stt, label in rows_spec:
@@ -649,7 +670,7 @@ def integrate_tq_and_qhns_into_workbook(
             ws_q.cell(cur_r, 2, label).alignment = align_left
             for c in range(1, 8):
                 cell = ws_q.cell(cur_r, c)
-                cell.font = font_bold if key in ("gtgt", "tndn", "tncn", "nt_tong") else font_regular
+                cell.font = font_bold if key in ("gtgt", "tndn", "tncn", "nt_tong", "lpmb") else font_regular
                 cell.border = border_all
                 if c >= 3:
                     cell.alignment = align_right
@@ -839,6 +860,47 @@ def integrate_tq_and_qhns_into_workbook(
         ws_q.cell(r_nt, 7, f"=G{r_nt_g}+G{r_nt_t}")
         ws_q.cell(r_nt_g, 7, f"=C{r_nt_g}+D{r_nt_g}+E{r_nt_g}-F{r_nt_g}")
         ws_q.cell(r_nt_t, 7, f"=C{r_nt_t}+D{r_nt_t}+E{r_nt_t}-F{r_nt_t}")
+
+        # 6) Lệ phí môn bài (TM 2862, 2863, 2864 và 1801..1804)
+        r_mb = this_rows["lpmb"]
+        if y_idx == 0:
+            open_mb = round(metrics["opening_exact"]["LPMB"])
+            if open_mb != 0:
+                ws_q.cell(r_mb, 8, 0).number_format = num_fmt
+                ws_q.cell(r_mb, 9, open_mb).number_format = num_fmt
+                ws_q.cell(r_mb, 8).font = font_regular
+                ws_q.cell(r_mb, 9).font = font_regular
+                dk_mb_notes = metrics.get("dk_lpmb_notes", [])
+                note_detail = "; ".join(dk_mb_notes[:6]) + ("..." if len(dk_mb_notes) > 6 else "")
+                ws_q.cell(r_mb, 9).comment = Comment(
+                    f"Số dư đầu kỳ LPMB kỳ trước chuyển sang ({open_mb:,.0f})" + (f": {note_detail}" if note_detail else ""),
+                    "QHNS",
+                )
+                ws_q.cell(r_mb, 3, f"=H{r_mb}+I{r_mb}")
+            else:
+                ws_q.cell(r_mb, 3, 0)
+        else:
+            ws_q.cell(r_mb, 3, f"=G{prev_rows['lpmb']}")
+
+        mb_ps = round(metrics["lpmb_ps_by_ky"][y])
+        mb_nop = round(metrics["lpmb_c2_by_ht"][y])
+        ws_q.cell(r_mb, 4, mb_ps)
+        ps_detail = metrics["lpmb_ps_detail"].get(y, {})
+        if ps_detail:
+            ps_parts = [f"TM {tm}: {round(v):,.0f}" for tm, v in sorted(ps_detail.items()) if round(v) != 0]
+            if ps_parts:
+                ws_q.cell(r_mb, 4).comment = Comment("Phát sinh LPMB trên TQ: " + "; ".join(ps_parts), "QHNS")
+
+        ws_q.cell(r_mb, 6, mb_nop)
+        nop_detail = metrics["lpmb_nop_detail"].get(y, {})
+        mb_sp_notes = special_nop_notes.get(("LPMB", y), [])
+        if nop_detail or mb_sp_notes:
+            nop_parts = [f"TM {tm}: {round(v):,.0f}" for tm, v in sorted(nop_detail.items()) if round(v) != 0]
+            cmt = "Đã nộp LPMB theo ngày hạch toán trên TQ: " + "; ".join(nop_parts)
+            if mb_sp_notes:
+                cmt += " (bao gồm: " + "; ".join(mb_sp_notes) + ")"
+            ws_q.cell(r_mb, 6).comment = Comment(cmt, "QHNS")
+        ws_q.cell(r_mb, 7, f"=C{r_mb}+D{r_mb}+E{r_mb}-F{r_mb}")
 
         # Nếu là năm cuối cùng và có khoản xử lý qua thanh tra (Cột E), đặt công thức đối chiếu ngược tại cột H
         if y_idx == len(years) - 1:
