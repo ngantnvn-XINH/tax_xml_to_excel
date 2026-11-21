@@ -21,3 +21,7 @@ Mọi chỉnh sửa mã nguồn, mẫu Excel, test và tài liệu trong dự á
 - **Tuyệt đối không** đưa tên doanh nghiệp thật, mã số thuế (MST) thật, số quyết định/chứng từ thật, đường dẫn thư mục chứa tên công ty thật, hay file Excel dữ liệu thật vào mã nguồn (`.py`), tài liệu (`.md`), unit test (`test_app.py`) hoặc lịch sử commit GitHub.
 - Mọi ví dụ minh họa và unit test chỉ dùng dữ liệu giả lập (VD: `MST 0100000001`, `CTY A`).
 - Luôn chạy toàn bộ bộ kiểm thử `python test_app.py` (100% PASS) trước khi commit & push.
+
+## 4. Bài Học Kỹ Thuật Bắt Buộc Ghi Nhớ (Không Lặp Lại)
+- **Định dạng thuần đen – trắng cho sheet copy ra Biên bản Word (`BaoCao_BienBan`):** Tuyệt đối không tô màu nền (`PatternFill(fill_type=None)`) và không dùng chữ màu; chỉ dùng chữ đen `Times New Roman`, viền đen mảnh, in đậm tiêu đề và dòng tổng để copy-paste trực tiếp vào file Word Biên bản không bị vỡ định dạng.
+- **Ưu tiên công thức Excel động thay vì số tĩnh Python trên sheet đối chiếu (`DoiChieu_QHNS`):** Cột `F` (`Chênh lệch làm tròn Tờ khai vs TQ`) bắt buộc dùng công thức động (`='YYYY'!G23`, `='YYYY'!G76`, `='YYYY'!G90`), không ghi số tĩnh tính tay bằng Python. Đồng thời `_eval_simple_formula` phải hỗ trợ đệ quy công thức lồng trong `SUM(...)`, `IF(...>0, ROUND(...))` và độ sâu `> 20` để không bao giờ lệch ảo khi file Excel mới xuất chưa mở lưu bằng MS Excel.
