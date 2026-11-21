@@ -230,9 +230,10 @@ def populate_tq_and_qhns(
                             f"+SUMIFS({rng_val},{rng_tm},\"1052\",{rng_kh},\"QT\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
                         )
                     else:
+                        # Số nộp C2 kỳ 1912 nộp năm 2020 (295.720.173) trừ số nộp thừa QT năm 2019 (19CN) bù trừ sang năm 2020 (-24.477.663 tại TQ!G212) = 271.242.510
                         f_dk = (
                             f"=-SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"C2\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
-                            f"+SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"QT\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                            f"+TQ!G212"
                         )
                 else:
                     f_dk = f"=G{prev_rows[tax_code]}"
