@@ -200,7 +200,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
             out_master_tncn = os.path.join(tmpdir, "TongHop_TNCN_HaiThongTu.xlsx")
             export_to_excel([d2020, decls[1]], out_master_tncn, include_appendices=False, split_by_tax_type=False)
             wb_master_tncn = openpyxl.load_workbook(out_master_tncn)
-            self.assertEqual(wb_master_tncn.sheetnames, ["Tong_hop_File", "TNCN"])
+            self.assertEqual(wb_master_tncn.sheetnames, ["Tong_hop_File", "TNCN", "2020", "2024"])
             ws_master = wb_master_tncn["TNCN"]
             self.assertEqual(ws_master["G1"].value, 2020)
             self.assertEqual(ws_master["G3"].value, 70)
@@ -598,6 +598,55 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(bctc_map.get("411"), 85500000000)
             self.assertEqual(bctc_map.get("411a"), 85500000000)
             self.assertEqual(bctc_map.get("411b"), 0)
+
+    def test_yearly_verification_sheets_98_rows(self) -> None:
+        """Kiểm thử sheet kiểm tra theo từng năm (mỗi năm 1 sheet, 98 dòng x 5 cột, công thức liên kết chuẩn)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dGTGT = TaxDeclaration(
+                file_path="gtgt_2024_12.xml", file_name="gtgt_2024_12.xml",
+                ma_tkhai="842", ten_tkhai="Tờ khai thuế GTGT", tax_type="GTGT",
+                ky_kkhai="12/2024", so_lan="0",
+                mst="0313248400", ten_nnt="CTY A",
+                tu_ngay=datetime.date(2024, 12, 1), den_ngay=datetime.date(2024, 12, 31),
+                ngay_lap=datetime.date(2025, 1, 20),
+                indicators={"ct22": 1000000, "ct32": 50000000, "ct33": 5000000, "ct43": 2000000}
+            )
+            dTNDN = TaxDeclaration(
+                file_path="tndn_2024.xml", file_name="tndn_2024.xml",
+                ma_tkhai="892", ten_tkhai="Tờ khai QTT TNDN", tax_type="TNDN",
+                ky_kkhai="2024", so_lan="0",
+                mst="0313248400", ten_nnt="CTY A",
+                tu_ngay=datetime.date(2024, 1, 1), den_ngay=datetime.date(2024, 12, 31),
+                ngay_lap=datetime.date(2025, 3, 30),
+                indicators={"ct04": 50000000, "ctB4": 3000000}
+            )
+            dTNCN = TaxDeclaration(
+                file_path="tncn_2024.xml", file_name="tncn_2024.xml",
+                ma_tkhai="864", ten_tkhai="Tờ khai QTT TNCN", tax_type="TNCN",
+                ky_kkhai="2024", so_lan="0",
+                mst="0313248400", ten_nnt="CTY A",
+                tu_ngay=datetime.date(2024, 1, 1), den_ngay=datetime.date(2024, 12, 31),
+                ngay_lap=datetime.date(2025, 3, 30),
+                indicators={"ct21": 5},
+                appendices={
+                    "PL05_1_BK_QTT_TNCN": [{"ct11": 100000000, "ct19": 5000000}],
+                    "PL05_2_BK_QTT_TNCN": [{"ct10": False, "ct11": 20000000, "ct14": 2000000}],
+                }
+            )
+            out_xlsx = os.path.join(tmpdir, "yearly_check.xlsx")
+            export_to_excel([dGTGT, dTNDN, dTNCN], out_xlsx)
+            wb = openpyxl.load_workbook(out_xlsx, data_only=False)
+            self.assertIn("2024", wb.sheetnames)
+            ws = wb["2024"]
+            self.assertEqual(ws.max_row, 98)
+            self.assertEqual(ws.max_column, 5)
+            self.assertIn("'So Thue GTGT Cuoi'!L", str(ws.cell(3, 3).value))
+            self.assertIn("'So Thue GTGT Cuoi'!X", str(ws.cell(9, 3).value))
+            self.assertIn("'BCHDKD'!", str(ws.cell(30, 3).value))
+            self.assertIn("'KKTNDN'!", str(ws.cell(52, 3).value))
+            self.assertEqual(ws.cell(84, 3).value, "='TNCN'!G41")
+            self.assertEqual(ws.cell(85, 3).value, "='TNCN'!G42")
+            self.assertEqual(ws.cell(90, 3).value, "=C85+C87+C89")
 
 
 if __name__ == "__main__":

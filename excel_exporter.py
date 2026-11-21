@@ -2558,6 +2558,333 @@ def write_sheet_chenh_lech_gtgt_tndn(
     return sname
 
 
+def write_yearly_verification_sheets(
+    wb: openpyxl.Workbook,
+    existing_sheets: Set[str],
+    gtgt_sheet_name: str = "So Thue GTGT Cuoi",
+    kqkd_sheet_name: str = "BCHDKD",
+    kktndn_sheet_name: str = "KKTNDN",
+    tncn_sheet_name: str = "TNCN",
+) -> List[str]:
+    """
+    Tạo các sheet kiểm tra thuế theo từng năm (mỗi năm 1 sheet: '2019', '2020', ..., '2025', ...)
+    chuẩn 98 dòng x 5 cột theo đúng mẫu biên bản kiểm tra thuế (Mau_kk.xlsx):
+    - Bảng 1 (Dòng 1..25): Thuế GTGT (liên kết công thức trực tiếp tới sheet 'So Thue GTGT Cuoi')
+    - Bảng 2 (Dòng 27..79): Thuế TNDN (liên kết công thức tới sheet 'BCHDKD' và 'KKTNDN', tự động
+      nhận diện tọa độ dòng của cả mẫu TT156 và TT80)
+    - Bảng 3 (Dòng 81..90): Thuế TNCN (liên kết công thức tới bảng tổng hợp 05-1/05-2 tại dòng 41..46 sheet 'TNCN')
+    - Bảng 4 (Dòng 93..98): Thuế Nhà thầu
+    """
+    actual_gtgt_sheet = None
+    actual_kqkd_sheet = None
+    actual_kktndn_sheet = None
+    actual_tncn_sheet = None
+
+    for s in wb.sheetnames:
+        sl = s.strip().lower()
+        if sl == gtgt_sheet_name.strip().lower() or "so thue gtgt cuoi" in sl:
+            actual_gtgt_sheet = s
+        elif sl == kqkd_sheet_name.strip().lower() or "bchdkd" in sl:
+            actual_kqkd_sheet = s
+        elif sl == kktndn_sheet_name.strip().lower() or "kktndn" in sl:
+            actual_kktndn_sheet = s
+        elif sl == tncn_sheet_name.strip().lower() or sl == "tk":
+            if actual_tncn_sheet is None or sl == tncn_sheet_name.strip().lower():
+                actual_tncn_sheet = s
+
+    # 1. Dò tọa độ dòng (r_first, r_last, r_sum) của từng năm trên sheet 'So Thue GTGT Cuoi'
+    gtgt_coords: Dict[int, Tuple[int, int, int]] = {}
+    if actual_gtgt_sheet and actual_gtgt_sheet in wb.sheetnames:
+        ws_gt = wb[actual_gtgt_sheet]
+        cur_first = 3
+        for r in range(3, ws_gt.max_row + 1):
+            val_e = str(ws_gt.cell(r, 5).value or "")
+            if "Tổng cộng năm" in val_e:
+                m = re.search(r"\b(19\d\d|20\d\d)\b", val_e)
+                if m:
+                    yr_num = int(m.group(0))
+                    r_last = max(cur_first, r - 1)
+                    gtgt_coords[yr_num] = (cur_first, r_last, r)
+                cur_first = r + 1
+
+    # 2. Dò tọa độ cột và bản đồ mã chỉ tiêu -> dòng của từng năm trên sheet 'BCHDKD'
+    kqkd_coords: Dict[int, Tuple[str, Dict[str, int]]] = {}
+    if actual_kqkd_sheet and actual_kqkd_sheet in wb.sheetnames:
+        ws_kq = wb[actual_kqkd_sheet]
+        code_cols = [
+            c for c in range(1, ws_kq.max_column + 1)
+            if str(ws_kq.cell(2, c).value or "").strip() == "Mã chỉ tiêu"
+        ]
+        for c in range(1, ws_kq.max_column + 1):
+            val_r1 = ws_kq.cell(1, c).value
+            if val_r1:
+                m = re.search(r"\b(19\d\d|20\d\d)\b", str(val_r1))
+                if m:
+                    yr_num = int(m.group(0))
+                    left_cc = [cc for cc in code_cols if cc < c]
+                    cc = max(left_cc) if left_cc else 4
+                    cmap: Dict[str, int] = {}
+                    for r_scan in range(4, ws_kq.max_row + 1):
+                        c_val = str(ws_kq.cell(r_scan, cc).value or "").strip()
+                        if c_val and c_val not in cmap:
+                            cmap[c_val] = r_scan
+                    kqkd_coords[yr_num] = (get_column_letter(c), cmap)
+
+    # 3. Dò tọa độ cột và bản đồ mã chỉ tiêu -> dòng của từng năm trên sheet 'KKTNDN'
+    kktndn_coords: Dict[int, Tuple[str, Dict[str, int]]] = {}
+    if actual_kktndn_sheet and actual_kktndn_sheet in wb.sheetnames:
+        ws_kk = wb[actual_kktndn_sheet]
+        code_cols = [
+            c for c in range(1, ws_kk.max_column + 1)
+            if str(ws_kk.cell(2, c).value or "").strip() == "Mã chỉ tiêu"
+        ]
+        for c in range(1, ws_kk.max_column + 1):
+            val_r1 = ws_kk.cell(1, c).value
+            if val_r1:
+                m = re.search(r"\b(19\d\d|20\d\d)\b", str(val_r1))
+                if m:
+                    yr_num = int(m.group(0))
+                    left_cc = [cc for cc in code_cols if cc < c]
+                    cc = max(left_cc) if left_cc else 4
+                    cmap = {}
+                    for r_scan in range(4, ws_kk.max_row + 1):
+                        c_val = str(ws_kk.cell(r_scan, cc).value or "").strip()
+                        if c_val and c_val not in cmap:
+                            cmap[c_val] = r_scan
+                    kktndn_coords[yr_num] = (get_column_letter(c), cmap)
+
+    # 4. Dò tọa độ cột của từng năm trên sheet 'TNCN' (hoặc 'TK')
+    tncn_coords: Dict[int, str] = {}
+    if actual_tncn_sheet and actual_tncn_sheet in wb.sheetnames:
+        ws_tn = wb[actual_tncn_sheet]
+        for c in range(5, ws_tn.max_column + 1):
+            val_r1 = ws_tn.cell(1, c).value
+            if val_r1:
+                m = re.search(r"\b(19\d\d|20\d\d)\b", str(val_r1))
+                if m:
+                    tncn_coords[int(m.group(0))] = get_column_letter(c)
+
+    all_years = sorted(
+        set(gtgt_coords.keys())
+        | set(kqkd_coords.keys())
+        | set(kktndn_coords.keys())
+        | set(tncn_coords.keys())
+    )
+    if not all_years:
+        return []
+
+    created_sheets: List[str] = []
+    yr_sheet_names: Dict[int, str] = {}
+
+    font_regular = Font(name="Times New Roman", size=11, bold=False)
+    font_bold = Font(name="Times New Roman", size=11, bold=True)
+    font_italic = Font(name="Times New Roman", size=11, italic=True)
+
+    bold_rows = {
+        1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        27, 29, 48, 56, 63, 76, 81, 83, 90, 93, 95, 96,
+    }
+    italic_rows = {97, 98}
+    header_rows = {1, 27, 81, 93}
+    sub_header_rows = {2, 28, 82, 94}
+    blank_rows = {26, 80, 91, 92}
+
+    for yr in all_years:
+        sname = sanitize_sheet_name(str(yr), existing_sheets)
+        ws = wb.create_sheet(title=sname)
+        yr_sheet_names[yr] = sname
+        created_sheets.append(sname)
+
+        def gtgt_ref(col_let: str, mode: str = "sum") -> Any:
+            if yr in gtgt_coords and actual_gtgt_sheet:
+                r_first, r_last, r_sum = gtgt_coords[yr]
+                target_r = r_first if mode == "first" else (r_last if mode == "last" else r_sum)
+                return f"='{actual_gtgt_sheet}'!{col_let}{target_r}"
+            return 0
+
+        is_kq_156 = True
+        if yr in kqkd_coords:
+            is_kq_156 = "[01]" in kqkd_coords[yr][1]
+
+        def kqkd_ref(code_156: str, code_80: Optional[str] = None) -> Any:
+            if yr in kqkd_coords and actual_kqkd_sheet:
+                col_let, cmap = kqkd_coords[yr]
+                target_code = code_156 if is_kq_156 else (code_80 or code_156)
+                if target_code and target_code in cmap:
+                    return f"='{actual_kqkd_sheet}'!{col_let}{cmap[target_code]}"
+            return 0
+
+        is_kk_156 = True
+        if yr in kktndn_coords:
+            is_kk_156 = "C9a" in kktndn_coords[yr][1]
+
+        def kktndn_ref(codes_156: Tuple[str, ...], codes_80: Optional[Tuple[str, ...]] = None) -> Any:
+            if yr in kktndn_coords and actual_kktndn_sheet:
+                col_let, cmap = kktndn_coords[yr]
+                target_codes = codes_156 if is_kk_156 else (codes_80 or codes_156)
+                terms = [f"'{actual_kktndn_sheet}'!{col_let}{cmap[c]}" for c in target_codes if c in cmap]
+                if terms:
+                    return "=" + "+".join(terms)
+            return 0
+
+        def tncn_ref(r_idx: int) -> Any:
+            if yr in tncn_coords and actual_tncn_sheet:
+                return f"='{actual_tncn_sheet}'!{tncn_coords[yr]}{r_idx}"
+            return 0
+
+        # Kiểm tra xem số khấu trừ đầu năm có khớp với cuối năm trước để nối công thức liên năm ở cột D3
+        d3_formula = "=C3"
+        if (yr - 1) in yr_sheet_names and (yr - 1) in gtgt_coords and yr in gtgt_coords and actual_gtgt_sheet:
+            ws_gt = wb[actual_gtgt_sheet]
+            prev_last_r = gtgt_coords[yr - 1][1]
+            curr_first_r = gtgt_coords[yr][0]
+            v_prev_end = ws_gt.cell(prev_last_r, 39).value or 0
+            v_curr_beg = ws_gt.cell(curr_first_r, 12).value or 0
+            if v_prev_end == v_curr_beg:
+                d3_formula = f"='{yr_sheet_names[yr - 1]}'!D24"
+
+        c43_formula = kqkd_ref("[15]", "[18]")
+        if c43_formula == 0:
+            c43_formula = "=C30-C31-C36+C40-C41"
+
+        rows_spec: Dict[int, Tuple[Any, Any, Any, Any, Any]] = {
+            # BẢNG 1: THUẾ GTGT (Dòng 1..25)
+            1: ("STT", "Chỉ tiêu", "Số báo cáo của người nộp thuế", "Số kiểm tra", "Chênh lệch"),
+            2: (-1, -2, -3, -4, "(5)=(4)-(3)"),
+            3: (1, "Thuế GTGT còn được khấu trừ kỳ trước chuyển sang", gtgt_ref("L", "first"), d3_formula, "=D3-C3"),
+            4: (2, "Doanh thu hàng hóa, dịch vụ bán ra", "=C5+C6+C10", "=D5+D6+D10", "=D4-C4"),
+            5: ("a", "Doanh thu hàng hóa, dịch vụ không chịu thuế GTGT", gtgt_ref("R"), "=C5", "=D5-C5"),
+            6: ("b", "Doanh thu hàng hóa, dịch vụ chịu thuế GTGT", "=SUM(C7:C9)", "=SUM(D7:D9)", "=D6-C6"),
+            7: (None, "Doanh thu chịu thuế suất 0%", gtgt_ref("U"), "=C7", "=D7-C7"),
+            8: (None, "Doanh thu chịu thuế suất 5%", gtgt_ref("V"), "=C8", "=D8-C8"),
+            9: (None, "Doanh thu chịu thuế suất 10%", gtgt_ref("X"), "=C9", "=D9-C9"),
+            10: ("c", "Doanh thu không tính thuế ", gtgt_ref("Z"), "=C10", "=D10-C10"),
+            11: (3, "Tổng giá trị hàng hóa, dịch vụ mua vào", "=C12+C13", "=D12+D13", "=D11-C11"),
+            12: (None, "Giá trị hàng hoá dịch vụ mua vào của dự án đầu tư ", 0, "=C12", "=D12-C12"),
+            13: (None, "Giá trị hàng hóa, dịch vụ phục vụ kinh doanh", gtgt_ref("M"), "=C13", "=D13-C13"),
+            14: (4, "Thuế GTGT đầu ra", "=SUM(C15:C16)", "=SUM(D15:D16)", "=D14-C14"),
+            15: (None, "Thuế GTGT đầu ra 5%", gtgt_ref("W"), "=C15", "=D15-C15"),
+            16: (None, "Thuế GTGT đầu ra 10%", gtgt_ref("Y"), "=C16", "=D16-C16"),
+            17: (5, "Thuế GTGT hàng hóa, dịch vụ mua vào", gtgt_ref("N"), "=C17", "=D17-C17"),
+            18: (6, "Thuế GTGT hàng hóa, dịch vụ mua vào được khấu trừ ", gtgt_ref("Q"), "=C18", "=D18-C18"),
+            19: (7, "Điều chỉnh giảm thuế GTGT còn được khấu trừ các kỳ trước", gtgt_ref("AD"), "=C19", "=D19-C19"),
+            20: (8, "Điều chỉnh tăng thuế GTGT còn được khấu trừ các kỳ trước", gtgt_ref("AE"), "=C20", "=D20-C20"),
+            21: (9, "Thuế GTGT đã nộp tại các địa phương khác của hoạt động xây dựng, lắp đặt, bán hàng vãng lai ngoại  tỉnh", gtgt_ref("AF"), "=C21", "=D21-C21"),
+            22: (10, "Thuế GTGT phát sinh", gtgt_ref("AC"), "=D14-D18", "=D22-C22"),
+            23: (11, "Thuế GTGT phải nộp trong kỳ", gtgt_ref("AH"), "=C23", "=D23-C23"),
+            24: (12, "Thuế GTGT còn được khấu trừ chuyển kỳ sau", gtgt_ref("AM", "last"), "=C24-E22+E23+E3", "=D24-C24"),
+            25: (13, "Thuế GTGT đã được hoàn", gtgt_ref("AL"), "=C25", "=D25-C25"),
+            26: (None, None, None, None, None),
+            # BẢNG 2: THUẾ TNDN (Dòng 27..79)
+            27: ("STT", "Chỉ tiêu", "Số báo cáo của người nộp thuế", "Số kiểm tra", "Chênh lệch"),
+            28: (-1, -2, -3, -4, "(5)=(4)-(3)"),
+            29: ("A", "Xác định lợi nhuận kế toán trước thuế thu nhập doanh nghiệp", None, None, None),
+            30: (1, "Doanh thu bán hàng hóa, dịch vụ ", kqkd_ref("[01]", "[04]"), "=C30", "=D30-C30"),
+            31: (2, "Các khoản giảm trừ doanh thu ", "=SUM(C32:C35)", "=SUM(D32:D35)", "=D31-C31"),
+            32: ("a", " Chiết khấu thương mại ", kqkd_ref("[04]", "[07]"), "=C32", "=D32-C32"),
+            33: ("b", " Giảm giá hàng bán", kqkd_ref("[05]", "[08]"), "=C33", "=D33-C33"),
+            34: ("c", " Giá trị hàng bán bị trả lai", kqkd_ref("[06]", "[09]"), "=C34", "=D34-C34"),
+            35: ("d", "Thuế tiêu thụ đặc biệt, thuế xuất khẩu, thuế giá trị gia tăng theo phương pháp trực tiếp phải nộp", kqkd_ref("[07]", "") if is_kq_156 else 0, "=C35", "=D35-C35"),
+            36: (3, "Chi phí sản xuất kinh doanh hàng hóa", "=SUM(C37:C39)", "=SUM(D37:D39)", "=D36-C36"),
+            37: ("a", "Giá vốn hàng bán", kqkd_ref("[10]", "[13]"), "=C37", "=D37-C37"),
+            38: ("b", " Chi phí bán hàng", kqkd_ref("[11]", "[14]"), "=C38", "=D38-C38"),
+            39: ("c", " Chi phí quản lý doanh nghiệp", kqkd_ref("[12]", "[15]"), "=C39", "=D39-C39"),
+            40: (4, "Doanh thu hoạt động tài chính", kqkd_ref("[08]", "[10]"), "=C40", "=D40-C40"),
+            41: (5, "Chi phí hoạt động tài chính  ", kqkd_ref("[13]", "[16]"), "=C41", "=D41-C41"),
+            42: (None, "Trong đó: Chi phí lãi tiền vay", kqkd_ref("[14]", "[17]"), "=C42", "=D42-C42"),
+            43: (6, "Lợi nhuận thuần từ hoạt động kinh doanh", c43_formula, "=D30-D31-D36+D40-D41", "=D43-C43"),
+            44: (7, "Thu nhập khác", kqkd_ref("[16]", "[19]"), "=C44", "=D44-C44"),
+            45: (8, "Chi phí khác", kqkd_ref("[17]", "[20]"), "=C45", "=D45-C45"),
+            46: (9, "Lợi nhuận khác", "=C44-C45", "=D44-D45", "=D46-C46"),
+            47: (10, "Tổng lợi nhuận kế toán trước thuế TNDN", "=C43+C46", "=D43+D46", "=D47-C47"),
+            48: ("B", "Xác định thu nhập chịu thuế theo luật thuế TNDN", None, None, None),
+            49: (1, "Điều chỉnh tăng tổng lợi nhuận trước thuế thu nhập doanh nghiệp", "=SUM(C50:C55)", "=SUM(D50:D55)", "=D49-C49"),
+            50: ("a", "Các khoản điều chỉnh tăng doanh thu", kktndn_ref(("B2",)), "=C50", "=D50-C50"),
+            51: ("b", "Chi phí của phần doanh thu điều chỉnh giảm", kktndn_ref(("B3",)), "=C51", "=D51-C51"),
+            52: ("c", "Các khoản chi không được trừ khi xác định thu nhập chịu thuế", kktndn_ref(("B4",)), "=C52", "=D52-C52"),
+            53: ("d", "Thuế thu nhập đã nộp cho phần thu nhập nhận được ở nước ngoài", kktndn_ref(("B5",)), "=C53", "=D53-C53"),
+            54: ("e", "Điều chỉnh tăng lợi nhuận do xác định giá thị trường đối với giao dịch liên kết", kktndn_ref(("B6",)), "=C54", "=D54-C54"),
+            55: ("f", "Các khoản điều chỉnh làm tăng lợi nhuận trước thuế khác", kktndn_ref(("B7",)), "=C55", "=D55-C55"),
+            56: (2, "Điều chỉnh giảm tổng lợi nhuận trước thuế thu nhập doanh nghiệp", "=SUM(C57:C59)", "=SUM(D57:D59)", "=D56-C56"),
+            57: ("a", "Giảm trừ các khoản doanh thu đã tính thuế năm trước", kktndn_ref(("B9",)), "=C57", "=D57-C57"),
+            58: ("b", "Chi phí của phần doanh thu điều chỉnh tăng", kktndn_ref(("B10",)), "=C58", "=D58-C58"),
+            59: ("c", "Các khoản điều chỉnh làm giảm lợi nhuận trước thuế khác", kktndn_ref(("B11",), ("B11", "B12")), "=C59", "=D59-C59"),
+            60: (3, "Tổng thu nhập chịu thuế (=A9+B1-B2)", "=C61+C62", "=D61+D62", "=D60-C60"),
+            61: ("a", "Thu nhập chịu thuế từ hoạt động SXKD", "=C47+C49-C56", "=D47+D49-D56", "=D61-C61"),
+            62: ("b", "Thu nhập chịu thuế từ hoạt động chuyển nhượng BĐS ", kktndn_ref(("B14",), ("B15",)), "=C62", "=D62-C62"),
+            63: ("C", "Xác định thuế TNDN phải nộp từ hoạt động sản xuất kinh doanh", None, None, None),
+            64: (1, "Thu nhập chịu thuế ", "=C47+C49-C56", "=D47+D49-D56", "=D64-C64"),
+            65: (2, "Thu nhập miễn thuế", kktndn_ref(("C2",)), "=C65", "=D65-C65"),
+            66: (3, "Chuyển lỗ, chi phí lãi vay và bù trừ lãi, lỗ ", "=SUM(C67:C68)", "=SUM(D67:D68)", "=D66-C66"),
+            67: ("a", "Lỗ từ hoạt động sản xuất kinh doanh được chuyển trong kỳ", kktndn_ref(("C3a",)), "=C67", "=D67-C67"),
+            68: ("b", "Lỗ từ hoạt động chuyển nhượng BĐS được bù trừ với lãi của hoạt động sản xuất kinh doanh", kktndn_ref(("C3b",)), "=C68", "=D68-C68"),
+            69: (4, "Thu nhập tính thuế (=C1-C2-C3)", "=C64-C66-C65", "=D64-D66-D65", "=D69-C69"),
+            70: (5, "Trích lập quỹ khoa học công nghệ", kktndn_ref(("C5",)), "=C70", "=D70-C70"),
+            71: (6, "Thu nhập tính thuế sau khi đã trích lập quỹ khoa học công nghệ (=C4-C5)", "=C69-C70", "=D69-D70", "=D71-C71"),
+            72: (7, "Thuế TNDN phải nộp theo thuế suất phổ thông ", "=IF(C71>0,ROUND(C71*0.2,0),0)", "=IF(D71>0,ROUND(D71*0.2,0),0)", "=D72-C72"),
+            73: (8, "Thuế TNDN chênh lệch do áp dụng mức thuế suất ưu đãi", kktndn_ref(("C11",)), "=C73", "=D73-C73"),
+            74: (9, "Thuế TNDN được miễn, giảm trong kỳ", kktndn_ref(("C12",), ("C12", "C13", "C14", "C15")), "=C74", "=D74-C74"),
+            75: (10, "Số thuế TNDN đã nộp ở nước ngoài được trừ trong kỳ tính thuế", kktndn_ref(("C15",), ("C16",)), "=C75", "=D75-C75"),
+            76: ("D", "Thuế TNDN phải nộp trong kỳ", "=SUM(C77:C79)", "=SUM(D77:D79)", "=D76-C76"),
+            77: (1, "Thuế TNDN từ hoạt động SXKD ", "=C72-C73-C74-C75", "=D72-D73-D74-D75", "=D77-C77"),
+            78: (2, "Thuế TNDN phải nộp từ hoạt động chuyển nhượng BĐS (nếu có)", kktndn_ref(("E2",)), "=C78", "=D78-C78"),
+            79: (3, "Thuế TNDN phải nộp khác (nếu có)", kktndn_ref(("E3",), ("E5",)), "=C79", "=D79-C79"),
+            80: (None, None, None, None, None),
+            # BẢNG 3: THUẾ TNCN (Dòng 81..90)
+            81: ("STT", "Chỉ tiêu", "Số báo cáo của người nộp thuế", "Số kiểm tra", "Chênh lệch"),
+            82: (-1, -2, -3, -4, "(5)=(4)-(3)"),
+            83: ("I", "Thuế TNCN từ tiền lương, tiền công ", None, None, None),
+            84: (1, "Thu nhập từ tiền lương, tiền công của cá nhân cư trú tính thuế theo biểu thuế lũy tiến từng phần ", tncn_ref(41), "=C84", "=D84-C84"),
+            85: (2, "Thuế TNCN từ tiền lương, tiền công của cá nhân cư trú tính thuế theo biểu thuế lũy tiến từng phần đã khấu trừ", tncn_ref(42), "=C85", "=D85-C85"),
+            86: (3, "Thu nhập từ tiền lương, tiền công của cá nhân cư trú tính thuế theo thuế suất toàn phần 10% ", tncn_ref(43), "=C86", "=D86-C86"),
+            87: (4, "Thuế TNCN từ tiền lương, tiền công của cá nhân cư trú tính thuế theo thuế suất toàn phần 10% đã khấu trừ", tncn_ref(44), "=C87", "=D87-C87"),
+            88: (5, "Thu nhập từ tiền lương, tiền công của cá nhân  không cư trú", tncn_ref(45), "=C88", "=D88-C88"),
+            89: (6, "Thuế TNCN từ tiền lương, tiền công của cá nhân không cư trú tính theo thuế suất 20% đã khấu trừ", tncn_ref(46), "=C89", "=D89-C89"),
+            90: ("Tổng hợp tổng số thuế TNCN phải khấu trừ", None, "=C85+C87+C89", "=D85+D87+D89", "=E85+E87+E89"),
+            91: (None, None, None, None, None),
+            92: (None, None, None, None, None),
+            # BẢNG 4: THUẾ NHÀ THẦU (Dòng 93..98)
+            93: ("STT", "Chỉ tiêu", "Số báo cáo của người nộp thuế", "số kiểm tra", "Chênh lệch"),
+            94: (-1, -2, -3, -4, "(5)=(4)-(3)"),
+            95: (1, "Doanh thu tính thuế của nhà thầu nước ngoài ", 0, "=C95", "=D95-C95"),
+            96: (2, "Thuế nhà thầu phải khấu trừ  ", "=C97+C98", "=D97+D98", "=E97+E98"),
+            97: ("a", "Thuế GTGT", 0, "=C97", "=D97-C97"),
+            98: ("b", "Thuế TNDN ", 0, "=C98", "=D98-C98"),
+        }
+
+        for r_idx in range(1, 99):
+            vals = rows_spec[r_idx]
+            if r_idx in blank_rows:
+                continue
+
+            row_font = font_bold if r_idx in bold_rows else (font_italic if r_idx in italic_rows else font_regular)
+            for c_idx, val in enumerate(vals, start=1):
+                cell = ws.cell(r_idx, c_idx, val)
+                cell.font = row_font
+                cell.border = THIN_BORDER
+                if r_idx in header_rows or r_idx in sub_header_rows:
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                elif c_idx == 1:
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                elif c_idx == 2:
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                else:
+                    cell.number_format = "#,##0"
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+
+        ws.merge_cells("B83:E83")
+        ws.merge_cells("A90:B90")
+        ws.cell(90, 1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        ws.column_dimensions["A"].width = 6
+        ws.column_dimensions["B"].width = 45
+        ws.column_dimensions["C"].width = 18
+        ws.column_dimensions["D"].width = 18
+        ws.column_dimensions["E"].width = 16
+
+    return created_sheets
+
+
 # ==============================================================================
 # 6. SHEET TỜ KHAI KHÁC (LỆ PHÍ MÔN BÀI 01/LPMB, THUẾ NHÀ THẦU, ...)
 # ==============================================================================
@@ -3188,6 +3515,9 @@ def _populate_workbook_sheets(
     if gtgt_items or tndn_items:
         write_sheet_chenh_lech_gtgt_tndn(wb, existing_sheets)
 
+    if gtgt_items or tndn_items or tncn_items:
+        write_yearly_verification_sheets(wb, existing_sheets)
+
     other_items = [d for d in valid_decls if d.tax_type == "Khác"]
     if other_items:
         write_other_declarations_sheet(wb, other_items, existing_sheets, sheet_name="To_Khai_Khac")
@@ -3254,6 +3584,7 @@ def export_to_excel(
 
                 if gtgt_items or tndn_items:
                     write_sheet_chenh_lech_gtgt_tndn(yr_wb, existing)
+                    write_yearly_verification_sheets(yr_wb, existing)
 
                 khac_items = [d for d in other_decls if d.tax_type == "Khác"]
                 if khac_items:
