@@ -32,9 +32,12 @@ Hoặc nhấp đúp vào file `run.bat` trên Windows.
 python test_app.py
 ```
 
-## Cấu trúc thư mục
-- `app.py`: Giao diện người dùng Desktop.
-- `tax_parser.py`: Bộ phân tích cú pháp & trích xuất dữ liệu XML thuế (Extract).
-- `excel_exporter.py`: Bộ làm sạch, chuẩn hóa và kết xuất báo cáo Excel (Transform & Load).
+## Cấu trúc thư mục & Sổ tay nghiệp vụ ("Bộ não thứ 2")
+- `SO_TAY_NGHIEP_VU_QHNS.md`: **Sổ tay nghiệp vụ chuẩn** lưu trữ toàn bộ quy tắc đối chiếu giữa Tờ khai thuế (`GTGT`, `TNDN`, `TNCN`, `Nhà thầu`) với Sổ Tổng Quan (`TQ`) trên hệ thống TMS và cách lập biểu **Quan Hệ Ngân Sách (`QHNS`)** khớp tuyệt đối với số dư cuối cùng của năm tài chính.
+- `qhns_summarizer.py`: Module đối chiếu dữ liệu Sổ Tổng Quan (`TQ`), kiểm tra chênh lệch Tờ khai vs Tổng quan (`F23/G23`, `F90/G90`) và tổng hợp biểu `QHNS`.
+- `payment_summarizer.py`: Module tổng hợp sổ nộp ngân sách (`so_nop.xlsx`) theo Năm Ngày nộp thuế và Tiểu mục.
+- `tax_Extractor_app.py` / `app.py`: Giao diện người dùng Desktop.
+- `xml_parser.py` / `tax_parser.py`: Bộ phân tích cú pháp & trích xuất dữ liệu XML thuế (Extract).
+- `excel_writer.py` / `excel_exporter.py`: Bộ làm sạch, chuẩn hóa và kết xuất báo cáo Excel kèm các sheet tổng hợp kiểm tra theo từng năm (`2020`..`2025`).
 - `split_catalogs.py`, `catalogs_dump.py`, `tncn_catalogs_dump.py`, `tncn_templates.py`: Danh mục chỉ tiêu chuẩn theo Thông tư 156/151/92/200 và Thông tư 80.
 - `test_app.py`: Bộ kiểm thử tự động (Unit Tests).
