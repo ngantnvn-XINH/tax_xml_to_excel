@@ -12,18 +12,19 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List
 
 from excel_exporter import export_to_excel
+from qhns_summarizer import integrate_tq_and_qhns_into_workbook
 from tax_parser import TaxDeclaration, parse_tax_xml
 
 
-APP_VERSION = "v1.2"
+APP_VERSION = "v1.3"
 
 
 class TaxXmlToExcelApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title(f"Chuyển đổi Tờ khai Thuế XML (GTGT, TNCN, TNDN, BCTC) sang Excel - {APP_VERSION}")
-        self.root.geometry("1060x650")
-        self.root.minsize(920, 540)
+        self.root.title(f"Chuyển đổi Tờ khai Thuế XML & Đối chiếu QHNS (GTGT, TNCN, TNDN, BCTC, TQ) - {APP_VERSION}")
+        self.root.geometry("1120x700")
+        self.root.minsize(980, 580)
 
         self.declarations: List[TaxDeclaration] = []
         self.file_paths_set: set[str] = set()
@@ -65,6 +66,21 @@ class TaxXmlToExcelApp:
 
         self.lbl_count = ttk.Label(btn_frame, text="Tổng: 0 file", font=("Segoe UI", 9, "bold"))
         self.lbl_count.pack(side=tk.RIGHT)
+
+        # Khung chọn Sổ Tổng Quan (TQ) tùy chọn để đối chiếu & lên tự động biểu QHNS
+        tq_frame = ttk.LabelFrame(
+            self.root,
+            text="1b. Sổ Tổng Quan (TQ - Tùy chọn: nếu chọn sẽ tự động đối chiếu F/G trên từng năm & xuất biểu QHNS)",
+            padding=(10, 6),
+        )
+        tq_frame.pack(fill=tk.X, padx=12, pady=4)
+
+        self.var_tq_path = tk.StringVar(value="")
+        ttk.Label(tq_frame, text="File Sổ Tổng Quan (TQ):").pack(side=tk.LEFT, padx=(0, 6))
+        self.ent_tq_path = ttk.Entry(tq_frame, textvariable=self.var_tq_path)
+        self.ent_tq_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Button(tq_frame, text="Chọn file TQ (.xlsx)...", command=self.select_tq_file).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(tq_frame, text="Bỏ chọn", command=self.clear_tq_file).pack(side=tk.LEFT)
 
         # Khung bộ lọc & tùy chọn
         opt_frame = ttk.LabelFrame(self.root, text="2. Tùy chọn lọc & xuất Excel", padding=10)
@@ -206,13 +222,45 @@ class TaxXmlToExcelApp:
         )
         self.btn_export.pack(side=tk.RIGHT, padx=(8, 0))
 
+        self.btn_qhns = ttk.Button(
+            bottom_frame,
+            text="LÊN QHNS TỪ EXCEL + TQ",
+            command=self.run_qhns_standalone,
+            width=24,
+        )
+        self.btn_qhns.pack(side=tk.RIGHT, padx=(8, 0))
+
         self.btn_export_tncn = ttk.Button(
             bottom_frame,
-            text="XUẤT TNCN KÈM PHỤ LỤC (RIÊNG THEO NĂM)",
+            text="XUẤT TNCN RIÊNG THEO NĂM",
             command=self.export_tncn_separate,
-            width=36,
+            width=26,
         )
         self.btn_export_tncn.pack(side=tk.RIGHT)
+
+    def select_tq_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Chọn file Excel Sổ Tổng Quan (TQ) tải từ TMS",
+            filetypes=[("Excel Workbook", "*.xlsx"), ("All files", "*.*")],
+        )
+        if path:
+            self.var_tq_path.set(os.path.normpath(path))
+
+    def clear_tq_file(self) -> None:
+        self.var_tq_path.set("")
+
+    def _get_year_bounds(self) -> tuple[int | None, int | None]:
+        if not self.var_filter_year.get():
+            return None, None
+        try:
+            y_from = int(self.var_year_from.get().strip()) if self.var_year_from.get().strip() else None
+        except ValueError:
+            y_from = None
+        try:
+            y_to = int(self.var_year_to.get().strip()) if self.var_year_to.get().strip() else None
+        except ValueError:
+            y_to = None
+        return y_from, y_to
 
     def _toggle_year_filter(self) -> None:
         if self.var_filter_year.get():
@@ -389,9 +437,12 @@ class TaxXmlToExcelApp:
         split_years = self.var_split_year.get()
         open_after = self.var_open_after.get()
         layout_mode = self.var_layout.get()
+        tq_path = self.var_tq_path.get().strip()
+        y_from, y_to = self._get_year_bounds()
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
+        self.btn_qhns.config(state=tk.DISABLED)
         self.lbl_status.config(text="Đang xuất Excel...")
         self.root.update_idletasks()
 
@@ -406,11 +457,30 @@ class TaxXmlToExcelApp:
                     layout=layout_mode,
                 )
 
+                qhns_alerts: List[str] = []
+                qhns_done = False
+                if tq_path and os.path.isfile(tq_path) and created and not split_files and not split_years:
+                    self.root.after(0, lambda: self.lbl_status.config(text="Đang đối chiếu TQ & lên QHNS..."))
+                    qhns_res = integrate_tq_and_qhns_into_workbook(
+                        created[0],
+                        tq_path,
+                        year_from=y_from,
+                        year_to=y_to,
+                        output_path=created[0],
+                    )
+                    qhns_alerts = qhns_res.get("alerts", [])
+                    qhns_done = True
+
                 def on_done() -> None:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
+                    self.btn_qhns.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Xuất Excel thành công!")
                     msg = "Đã xuất thành công:\n" + "\n".join(created)
+                    if qhns_done:
+                        msg += "\n\nĐã tích hợp Sổ Tổng Quan (TQ), đối chiếu cột F/G trên các sheet năm và lập biểu QHNS!"
+                        if qhns_alerts:
+                            msg += "\n\nLƯU Ý PHÁT HIỆN CHÊNH LỆCH TỜ KHAI vs TỔNG QUAN:\n- " + "\n- ".join(qhns_alerts)
                     messagebox.showinfo("Hoàn tất", msg)
                     if open_after and created:
                         try:
@@ -423,8 +493,78 @@ class TaxXmlToExcelApp:
                 def on_err() -> None:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
+                    self.btn_qhns.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Lỗi khi xuất Excel!")
                     messagebox.showerror("Lỗi", f"Không thể xuất file Excel:\n{exc}")
+
+                self.root.after(0, on_err)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def run_qhns_standalone(self) -> None:
+        """Chế độ 2: Ghép Sổ Tổng Quan (TQ), đối chiếu F/G và lập biểu QHNS vào file Excel tổng hợp đã có sẵn."""
+        excel_path = filedialog.askopenfilename(
+            title="Bước 1/2: Chọn file Excel Tổng hợp tờ khai đã xuất (VD: TongHop_ToKhaiThue.xlsx)",
+            filetypes=[("Excel Workbook", "*.xlsx")],
+        )
+        if not excel_path:
+            return
+
+        tq_path = self.var_tq_path.get().strip()
+        if not tq_path or not os.path.isfile(tq_path):
+            tq_path = filedialog.askopenfilename(
+                title="Bước 2/2: Chọn file Excel Sổ Tổng Quan (TQ) tải từ TMS",
+                filetypes=[("Excel Workbook", "*.xlsx"), ("All files", "*.*")],
+            )
+            if not tq_path:
+                return
+            self.var_tq_path.set(os.path.normpath(tq_path))
+
+        y_from, y_to = self._get_year_bounds()
+        open_after = self.var_open_after.get()
+
+        self.btn_export.config(state=tk.DISABLED)
+        self.btn_export_tncn.config(state=tk.DISABLED)
+        self.btn_qhns.config(state=tk.DISABLED)
+        self.lbl_status.config(text="Đang đối chiếu TQ & lên biểu QHNS...")
+        self.root.update_idletasks()
+
+        def worker() -> None:
+            try:
+                res = integrate_tq_and_qhns_into_workbook(
+                    excel_path,
+                    tq_path,
+                    year_from=y_from,
+                    year_to=y_to,
+                    output_path=excel_path,
+                )
+
+                def on_done() -> None:
+                    self.btn_export.config(state=tk.NORMAL)
+                    self.btn_export_tncn.config(state=tk.NORMAL)
+                    self.btn_qhns.config(state=tk.NORMAL)
+                    self.lbl_status.config(text="Lên biểu QHNS thành công!")
+                    yrs = res.get("years", [])
+                    yr_label = f"{yrs[0]}–{yrs[-1]}" if yrs else ""
+                    msg = f"Đã tích hợp Sổ Tổng Quan (TQ), đối chiếu F/G và lập biểu QHNS ({yr_label}) vào file:\n{excel_path}"
+                    alerts = res.get("alerts", [])
+                    if alerts:
+                        msg += "\n\nLƯU Ý PHÁT HIỆN CHÊNH LỆCH TỜ KHAI vs TỔNG QUAN:\n- " + "\n- ".join(alerts)
+                    messagebox.showinfo("Hoàn tất QHNS", msg)
+                    if open_after:
+                        try:
+                            os.startfile(excel_path)
+                        except Exception:
+                            pass
+
+                self.root.after(0, on_done)
+            except Exception as exc:
+                def on_err() -> None:
+                    self.btn_export.config(state=tk.NORMAL)
+                    self.btn_export_tncn.config(state=tk.NORMAL)
+                    self.btn_qhns.config(state=tk.NORMAL)
+                    self.lbl_status.config(text="Lỗi khi lên biểu QHNS!")
+                    messagebox.showerror("Lỗi", f"Không thể lập biểu QHNS:\n{exc}")
 
                 self.root.after(0, on_err)
 

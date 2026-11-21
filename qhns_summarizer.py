@@ -3,46 +3,25 @@
 Module tổng hợp sheet Tổng quan (TQ), đối chiếu Tờ khai vs Tổng quan trên các sheet Năm (2020..2025)
 và lập biểu Quan Hệ Ngân Sách (QHNS) chuẩn nghiệp vụ thanh tra - kiểm tra thuế.
 
-Các quy tắc nghiệp vụ cốt lõi (đã được chuẩn hóa từ file mẫu của Chuyên gia Kiểm tra thuế):
-1. Đối chiếu trên từng sheet Năm ('2020'..'2025'):
-   - Dòng 23 (Chỉ tiêu 11 - Thuế GTGT phải nộp trong kỳ):
-     + C23: Số báo cáo trên tờ khai ('So Thue GTGT Cuoi'!AH...)
-     + F23: Phát sinh giao dịch TK (Tiểu mục 1701) trên sheet TQ theo Kỳ báo cáo thuộc năm đó.
-     + G23 (=C23-F23): Chênh lệch giữa Tờ khai GTGT và Tổng quan TQ.
-   - Dòng 90 (Tổng hợp tổng số thuế TNCN phải khấu trừ):
-     + C90 (=C85+C87+C89): Tổng số thuế TNCN phải khấu trừ trên Tờ khai Quyết toán 05/QTT-TNCN (05-1 + 05-2).
-     + F90: Phát sinh giao dịch TK + TH + TQ (Tiểu mục 1001) trên sheet TQ theo Kỳ báo cáo thuộc năm đó.
-     + G90 (=C90-F90): Chênh lệch giữa Tờ khai TNCN và Tổng quan TQ (VD năm 2022 thiếu tờ khai 2201 trên TQ -> G90 = 835,803,026).
-
-2. Cách lấy dữ liệu lên bảng QHNS (1 biểu chuẩn duy nhất, 8 dòng/năm):
-   - Cột (3) Số kỳ trước chuyển sang (Đầu kỳ năm 2020):
-     + Thuế GTGT (1701): C5 = H5 + I5 = 64,511,180 (Số nộp của QT 2015 kỳ 15CN nộp năm 2021 trong kỳ kiểm tra)
-                                       + 847,949,684 (Số nộp C2 tháng 1912 nộp ngày 20/01/2020) = 912,460,864.
-     + Thuế TNCN (1001): C8 = H8 + I8 = 295,720,173 (Số nộp C2 kỳ 1912 nộp ngày 20/01/2020)
-                                       - 25,477,587 (Số nộp thừa trên QT 2019 kỳ 19CN = TQ 1,137,823 + TH -26,615,410) = 270,242,586.
-     + Từ năm 2021..2025: Cột (3) = Cột (7) Số còn phải nộp cuối năm liền trước.
-   - Cột (4) Số báo cáo phát sinh phải nộp trong kỳ & Cột (5) Số xử lý qua thanh tra:
-     + Khi Tờ khai khớp với Tổng quan (hoặc lệch làm tròn vài đồng):
-       * Thuế GTGT: D = '<Năm>'!C23
-       * Thuế TNCN: D = '<Năm>'!C90
-     + Khi thiếu tờ khai trên Tổng quan làm số phát sinh trên TQ nhỏ hơn số thực tế trên Tờ khai QTT (như TNCN năm 2022 thiếu TK 2201):
-       * Cột (4) Số báo cáo phát sinh (D24): Lấy số phát sinh đã ghi nhận trên Tổng quan TQ (='2022'!F90 = 4,243,002,612).
-       * Cột (5) Số xử lý qua thanh tra (E24): Lấy số chênh lệch thực tế giữa Tờ khai và Tổng quan do thiếu tờ khai (='2022'!G90 = 835,803,026).
-   - Cột (6) Số đã nộp (F):
-     + Lấy giao dịch C2 theo Năm Ngày hạch toán trên Tổng quan TQ (Tiểu mục 1701 cho GTGT, Tiểu mục 1001 cho TNCN, Tiểu mục 1052 cho TNDN).
-     + Trường hợp đặc biệt có hủy chứng từ thì cộng thêm giao dịch HC.
-   - Cột (7) Số còn phải nộp (G):
-     + G = C + D + E - F
-     + Tại dòng TNCN năm cuối (2025), ô H48 (=G48-E24) dùng để kiểm tra đối chiếu lại số dư cuối kỳ trên sổ TQ khi chưa cộng khoản xử lý qua thanh tra E24.
+Tích hợp trực tiếp vào ứng dụng Desktop (app.py) cho cả 2 chế độ:
+1. Chạy trọn gói: Xuất XML -> Sheet năm -> Tự động ghép TQ, đối chiếu F/G & sinh QHNS.
+2. Chạy bổ sung: Chọn file Excel tổng hợp đã xuất + file Sổ Tổng Quan (TQ) -> Tự động cập nhật TQ, đối chiếu & sinh QHNS.
 """
-import re
+from __future__ import annotations
+
 import datetime
-import shutil
+import os
+import re
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple
+
 import openpyxl
 from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 
-def parse_date(val):
+def parse_date(val: Any) -> Optional[datetime.datetime]:
     if isinstance(val, datetime.datetime):
         return val
     if isinstance(val, datetime.date):
@@ -50,7 +29,7 @@ def parse_date(val):
     if not val:
         return None
     s = str(val).strip()
-    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
         try:
             return datetime.datetime.strptime(s[:10], fmt)
         except ValueError:
@@ -58,15 +37,15 @@ def parse_date(val):
     return None
 
 
-def extract_ky_year(ky_val, ngay_ht=None):
+def extract_ky_year(ky_val: Any, ngay_ht: Optional[datetime.datetime] = None) -> Optional[int]:
     """
     Trích xuất năm của Kỳ báo cáo:
     - '2001'..'2012' -> 2020 (YY=20, MM=01..12)
-    - '1912' -> 2019, '19CN' -> 2019, '15CN' -> 2015
+    - '1912' -> 2019, '19CN' -> 2019, '15CN' -> 2015, '16Q1' -> 2016
     - '01/2021', 'Q1/2021', '2021' -> 2021
     """
     if ky_val is not None:
-        s = str(ky_val).strip()
+        s = str(ky_val).strip().upper()
         m_short = re.match(r"^(\d{2})(0[1-9]|1[0-2]|Q\d|CN)$", s)
         if m_short:
             return 2000 + int(m_short.group(1))
@@ -78,111 +57,705 @@ def extract_ky_year(ky_val, ngay_ht=None):
     return None
 
 
-def compute_tq_metrics(ws_tq, start_year=2020, end_year=2025):
-    """
-    Tính toán toàn bộ chỉ số từ sheet TQ để đối chiếu với Tờ khai và lên bảng QHNS.
-    """
-    years = list(range(start_year, end_year + 1))
-    metrics = {
-        "gtgt_tk_by_ky": {y: 0 for y in years},
-        "gtgt_c2_by_ht": {y: 0 for y in years},
-        "tndn_tk_qt_by_ky": {y: 0 for y in years},
-        "tndn_c2_by_ht": {y: 0 for y in years},
-        "tncn_tk_th_tq_by_ky": {y: 0 for y in years},
-        "tncn_c2_by_ht": {y: 0 for y in years},
-        # Số đầu kỳ năm start_year (các khoản có Kỳ báo cáo < start_year nhưng hạch toán/nộp trong kỳ kiểm tra)
-        "dk_gtgt_qt_truoc": 0,   # VD: 64,511,180 (QT 2015 kỳ 15CN nộp năm 2021)
-        "dk_gtgt_c2_1912": 0,    # VD: 847,949,684 (Số nộp C2 kỳ 1912 ngày 20/01/2020)
-        "dk_tncn_c2_1912": 0,    # VD: 295,720,173 (Số nộp C2 kỳ 1912 ngày 20/01/2020)
-        "dk_tncn_qt_2019": 0,    # VD: -25,477,587 (Số nộp thừa trên QT 2019 kỳ 19CN: TQ + TH)
-    }
+def _norm_header(val: Any) -> str:
+    if val is None:
+        return ""
+    s = str(val).strip().lower()
+    # Chuẩn hóa Unicode tổ hợp/dựng sẵn đơn giản cho các từ khóa cột TMS
+    import unicodedata
+    s = unicodedata.normalize("NFC", s)
+    return re.sub(r"\s+", " ", s)
 
-    for r in range(2, ws_tq.max_row + 1):
-        # Hỗ trợ cả 2 định dạng bảng TQ (có cột STT ở cột A hoặc cột Cơ quan thuế ở cột A)
-        h1 = str(ws_tq.cell(1, 2).value or "").strip().lower()
-        if "báo cáo" in h1 or "bao cao" in h1:
-            # Định dạng TQ chuẩn TMS trong TongHop_ToKhaiThue.xlsx:
-            # B(2)=Kỳ báo cáo, D(4)=Ký hiệu giao dịch, E(5)=Tiểu mục, G(7)=Số tiền, J(10)=Ngày hạch toán
-            ky_bc = str(ws_tq.cell(r, 2).value or "").strip()
-            loai_gd = str(ws_tq.cell(r, 4).value or "").strip().upper()
-            tm = str(ws_tq.cell(r, 5).value or "").strip()
-            so_tien = ws_tq.cell(r, 7).value
-            ngay_ht = parse_date(ws_tq.cell(r, 10).value)
-        else:
-            stt = ws_tq.cell(r, 1).value
-            if stt is None or not str(stt).strip().isdigit():
+
+def detect_tq_layout(ws_tq) -> Tuple[int, Dict[str, int]]:
+    """
+    Tự động nhận diện dòng tiêu đề và chỉ số cột (1-based) của sheet Sổ Tổng Quan (TQ).
+    Hỗ trợ cả định dạng TMS chuẩn (Cơ quan thuế | Kỳ báo cáo | ... | Ký hiệu giao dịch | Tiểu mục | ... | Số tiền | ... | Ngày hạch toán)
+    và định dạng có cột STT ở cột A.
+    """
+    for r in range(1, min(ws_tq.max_row + 1, 15)):
+        col_map: Dict[str, int] = {}
+        for c in range(1, min(ws_tq.max_column + 1, 25)):
+            h = _norm_header(ws_tq.cell(r, c).value)
+            if not h:
                 continue
-            ngay_ht = parse_date(ws_tq.cell(r, 3).value)
-            ky_bc = str(ws_tq.cell(r, 5).value or "").strip()
-            tm = str(ws_tq.cell(r, 6).value or "").strip()
-            so_tien = ws_tq.cell(r, 7).value
-            loai_gd = str(ws_tq.cell(r, 11).value or "").strip().upper()
+            if "kỳ báo cáo" in h or "ky bao cao" in h or "kỳ thuế" == h:
+                col_map.setdefault("ky", c)
+            elif "ký hiệu giao dịch" in h or "ky hieu giao dich" in h or "loại giao dịch" in h or "loại gd" in h or "mã giao dịch" in h:
+                col_map.setdefault("gd", c)
+            elif "tiểu mục" in h or "tieu muc" in h:
+                col_map.setdefault("tm", c)
+            elif h in ("số tiền", "so tien") or ("số tiền" in h and "tổng" not in h and "còn" not in h):
+                col_map.setdefault("so_tien", c)
+            elif "ngày hạch toán" in h or "ngay hach toan" in h:
+                col_map.setdefault("ngay_ht", c)
+            elif "nợ/có" in h or "no/co" in h or h in ("nợ có", "no co"):
+                col_map.setdefault("no_co", c)
+        if all(k in col_map for k in ("ky", "gd", "tm", "so_tien", "ngay_ht")):
+            return r, col_map
 
-        if not isinstance(so_tien, (int, float)) or not ngay_ht:
+    # Fallback mặc định theo file TMS chuẩn
+    return 1, {"ky": 2, "gd": 4, "tm": 5, "so_tien": 7, "ngay_ht": 10}
+
+
+def parse_tq_rows(ws_tq) -> List[Dict[str, Any]]:
+    """Đọc toàn bộ các dòng giao dịch hợp lệ từ sheet TQ."""
+    header_row, col_map = detect_tq_layout(ws_tq)
+    rows: List[Dict[str, Any]] = []
+    for r in range(header_row + 1, ws_tq.max_row + 1):
+        so_tien = ws_tq.cell(r, col_map["so_tien"]).value
+        ngay_ht = parse_date(ws_tq.cell(r, col_map["ngay_ht"]).value)
+        gd = str(ws_tq.cell(r, col_map["gd"]).value or "").strip().upper()
+        tm = str(ws_tq.cell(r, col_map["tm"]).value or "").strip()
+        ky = str(ws_tq.cell(r, col_map["ky"]).value or "").strip().upper()
+        no_co = ""
+        if "no_co" in col_map:
+            no_co = str(ws_tq.cell(r, col_map["no_co"]).value or "").strip().upper()
+
+        if not isinstance(so_tien, (int, float)) or not ngay_ht or not gd or not tm:
             continue
 
-        ht_year = ngay_ht.year
-        ky_year = extract_ky_year(ky_bc, ngay_ht)
+        rows.append({
+            "row": r,
+            "ky": ky,
+            "ky_year": extract_ky_year(ky, ngay_ht),
+            "gd": gd,
+            "tm": tm,
+            "so_tien": float(so_tien),
+            "ngay_ht": ngay_ht,
+            "ht_year": ngay_ht.year,
+            "no_co": no_co,
+        })
+    return rows
 
-        # 1. Đầu kỳ (Kỳ báo cáo < start_year nhưng Ngày hạch toán thuộc kỳ kiểm tra start_year..end_year)
-        if ky_year and ky_year < start_year and start_year <= ht_year <= end_year:
+
+def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year: int) -> Dict[str, Any]:
+    """
+    Tính toán toàn bộ chỉ số từ dữ liệu TQ theo đúng chuẩn nghiệp vụ thanh tra - kiểm tra thuế:
+    - GTGT (1701): Phát sinh = TK theo Kỳ báo cáo; Đã nộp = C2 (+ HC nếu có) theo Năm Ngày hạch toán.
+    - TNDN (1052): Phát sinh = TK + QT theo Kỳ báo cáo; Đã nộp = C2 (+ HC nếu có) theo Năm Ngày hạch toán.
+    - TNCN (1001): Phát sinh = TK + TH + TQ theo Kỳ báo cáo; Đã nộp = C2 (+ HC nếu có) theo Năm Ngày hạch toán.
+    - Đầu kỳ năm start_year: Các khoản Kỳ báo cáo < start_year nhưng nộp/hạch toán trong start_year..end_year.
+    """
+    years = list(range(start_year, end_year + 1))
+    prev_year = start_year - 1
+    prev_yy = str(prev_year)[-2:]
+
+    metrics: Dict[str, Any] = {
+        "gtgt_tk_by_ky": {y: 0.0 for y in years},
+        "gtgt_c2_by_ht": {y: 0.0 for y in years},
+        "tndn_tk_qt_by_ky": {y: 0.0 for y in years},
+        "tndn_c2_by_ht": {y: 0.0 for y in years},
+        "tncn_tk_th_tq_by_ky": {y: 0.0 for y in years},
+        "tncn_c2_by_ht": {y: 0.0 for y in years},
+        # Đầu kỳ năm start_year
+        "dk_gtgt_qt_truoc": 0.0,
+        "dk_gtgt_qt_notes": [],
+        "dk_gtgt_c2_prev": 0.0,
+        "dk_gtgt_c2_notes": [],
+        "dk_tndn_h": 0.0,
+        "dk_tndn_i": 0.0,
+        "dk_tncn_c2_prev": 0.0,
+        "dk_tncn_c2_notes": [],
+        "dk_tncn_qt_prev": 0.0,
+        "dk_tncn_qt_notes": [],
+        # Phát hiện kỳ thiếu TK trên TQ (có C2 nhưng không có TK)
+        "tncn_tk_periods": defaultdict(set),
+        "tncn_c2_periods": defaultdict(set),
+        "gtgt_tk_periods": defaultdict(set),
+        "gtgt_c2_periods": defaultdict(set),
+    }
+
+    # Kiểm tra quy ước dấu của giao dịch C2 trong file TQ (âm như TMS chuẩn hay dương kèm cột Có)
+    c2_vals = [x["so_tien"] for x in tq_rows if x["gd"] == "C2" and x["so_tien"] != 0]
+    c2_is_negative = bool(c2_vals and sum(1 for v in c2_vals if v < 0) >= len(c2_vals) / 2)
+
+    def payment_amount(item: Dict[str, Any]) -> float:
+        # Trả về số tiền nộp mang dấu dương cho C2; nếu HC (hủy chứng từ) thì ngược dấu C2
+        val = item["so_tien"]
+        if c2_is_negative:
+            return -val
+        if item["gd"] == "HC":
+            return -abs(val)
+        return abs(val)
+
+    for item in tq_rows:
+        tm = item["tm"]
+        gd = item["gd"]
+        ky = item["ky"]
+        ky_y = item["ky_year"]
+        ht_y = item["ht_year"]
+        val = item["so_tien"]
+
+        # 1. Đầu kỳ (Kỳ báo cáo < start_year nhưng Ngày hạch toán trong kỳ kiểm tra start_year..end_year)
+        if ky_y is not None and ky_y < start_year and start_year <= ht_y <= end_year:
             if tm == "1701":
-                if loai_gd == "C2" and ky_bc == "1912":
-                    metrics["dk_gtgt_c2_1912"] += so_tien
-                elif loai_gd == "C2" and ky_bc == "15CN":
-                    metrics["dk_gtgt_qt_truoc"] += so_tien
+                if gd == "QT":
+                    metrics["dk_gtgt_qt_truoc"] += abs(val)
+                    metrics["dk_gtgt_qt_notes"].append(f"QT {ky_y} ({ky}) nộp năm {ht_y}")
+                elif gd == "C2" and ky_y == prev_year and ky.startswith(prev_yy):
+                    metrics["dk_gtgt_c2_prev"] += payment_amount(item)
+                    if ky not in metrics["dk_gtgt_c2_notes"]:
+                        metrics["dk_gtgt_c2_notes"].append(ky)
             elif tm == "1001":
-                if loai_gd == "C2" and ky_bc == "1912":
-                    metrics["dk_tncn_c2_1912"] += so_tien
-                elif loai_gd in ("TQ", "TH") and ky_bc == "19CN":
-                    metrics["dk_tncn_qt_2019"] += so_tien
-
-        # 2. Phát sinh theo năm Kỳ báo cáo
-        if ky_year in years:
-            if tm == "1701" and loai_gd == "TK":
-                metrics["gtgt_tk_by_ky"][ky_year] += so_tien
-            elif tm == "1052" and loai_gd in ("TK", "QT"):
-                metrics["tndn_tk_qt_by_ky"][ky_year] += so_tien
-            elif tm == "1001" and loai_gd in ("TK", "TH", "TQ"):
-                metrics["tncn_tk_th_tq_by_ky"][ky_year] += so_tien
-
-        # 3. Số đã nộp C2 theo năm Ngày hạch toán
-        if ht_year in years and loai_gd == "C2":
-            if tm == "1701":
-                metrics["gtgt_c2_by_ht"][ht_year] += so_tien
+                if gd == "C2" and ky_y == prev_year and ky.startswith(prev_yy):
+                    metrics["dk_tncn_c2_prev"] += payment_amount(item)
+                    if ky not in metrics["dk_tncn_c2_notes"]:
+                        metrics["dk_tncn_c2_notes"].append(ky)
+                elif gd in ("TQ", "TH") and ky == f"{prev_yy}CN":
+                    metrics["dk_tncn_qt_prev"] += val
+                    if ky not in metrics["dk_tncn_qt_notes"]:
+                        metrics["dk_tncn_qt_notes"].append(ky)
             elif tm == "1052":
-                metrics["tndn_c2_by_ht"][ht_year] += so_tien
+                if gd == "QT":
+                    metrics["dk_tndn_h"] += abs(val)
+                elif gd == "C2" and ky_y == prev_year:
+                    metrics["dk_tndn_i"] += payment_amount(item)
+
+        # 2. Phát sinh theo Năm Kỳ báo cáo
+        if ky_y in years:
+            if tm == "1701" and gd == "TK":
+                metrics["gtgt_tk_by_ky"][ky_y] += val
+                if ky:
+                    metrics["gtgt_tk_periods"][ky_y].add(ky)
+            elif tm == "1052" and gd in ("TK", "QT"):
+                metrics["tndn_tk_qt_by_ky"][ky_y] += val
+            elif tm == "1001" and gd in ("TK", "TH", "TQ"):
+                metrics["tncn_tk_th_tq_by_ky"][ky_y] += val
+                if gd == "TK" and ky:
+                    metrics["tncn_tk_periods"][ky_y].add(ky)
+
+            if tm == "1701" and gd == "C2" and ky:
+                metrics["gtgt_c2_periods"][ky_y].add(ky)
+            elif tm == "1001" and gd == "C2" and ky:
+                metrics["tncn_c2_periods"][ky_y].add(ky)
+
+        # 3. Số đã nộp C2 (+ HC nếu có hủy chứng từ) theo Năm Ngày hạch toán
+        if ht_y in years and gd in ("C2", "HC"):
+            p_amt = payment_amount(item)
+            if tm == "1701":
+                metrics["gtgt_c2_by_ht"][ht_y] += p_amt
+            elif tm == "1052":
+                metrics["tndn_c2_by_ht"][ht_y] += p_amt
             elif tm == "1001":
-                metrics["tncn_c2_by_ht"][ht_year] += so_tien
+                metrics["tncn_c2_by_ht"][ht_y] += p_amt
 
     return metrics
 
 
-def sync_master_workbook(src_master_path, dst_paths):
+def _copy_tq_sheet(wb_dst: openpyxl.Workbook, ws_src) -> None:
+    """Chép toàn bộ sheet TQ từ file nguồn sang workbook đích."""
+    if "TQ" in wb_dst.sheetnames:
+        del wb_dst["TQ"]
+    ws_dst = wb_dst.create_sheet("TQ")
+
+    for r in range(1, ws_src.max_row + 1):
+        for c in range(1, ws_src.max_column + 1):
+            src_cell = ws_src.cell(r, c)
+            dst_cell = ws_dst.cell(r, c, value=src_cell.value)
+            if src_cell.number_format:
+                dst_cell.number_format = src_cell.number_format
+            if r == 1:
+                dst_cell.font = Font(name="Times New Roman", size=10, bold=True)
+            else:
+                dst_cell.font = Font(name="Times New Roman", size=10)
+
+    for col_idx in range(1, ws_src.max_column + 1):
+        col_letter = get_column_letter(col_idx)
+        src_dim = ws_src.column_dimensions.get(col_letter)
+        ws_dst.column_dimensions[col_letter].width = (src_dim.width if (src_dim and src_dim.width) else 14)
+
+
+def _eval_simple_formula(
+    wb_f: openpyxl.Workbook,
+    wb_v: openpyxl.Workbook,
+    sheet_name: str,
+    cell_ref: str,
+    depth: int = 0,
+) -> float:
     """
-    Đồng bộ file tổng hợp chuẩn (đã bao gồm đối chiếu Tờ khai vs Tổng quan trên các sheet Năm
-    và biểu QHNS kèm đầy đủ ghi chú nghiệp vụ) sang các đường dẫn đích.
+    Đánh giá nhanh các công thức Excel cơ bản (=SUM(...), ='Sheet'!A1, cộng/trừ ô)
+    để so sánh chính xác ngay cả khi file Excel vừa sinh bằng openpyxl chưa được mở bằng MS Excel.
     """
-    for dst in dst_paths:
-        shutil.copy2(src_master_path, dst)
-        print(f"Synced master workbook to: {dst}")
+    if depth > 8 or sheet_name not in wb_f.sheetnames:
+        return 0.0
+    ws_v = wb_v[sheet_name]
+    cached = ws_v[cell_ref].value
+    if isinstance(cached, (int, float)):
+        return float(cached)
+
+    ws_f = wb_f[sheet_name]
+    raw = ws_f[cell_ref].value
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if not isinstance(raw, str) or not raw.startswith("="):
+        return 0.0
+
+    expr = raw[1:].strip()
+
+    # Trường hợp SUMIF($F$571:$F$772,"[]",K571:K772)
+    m_sumif = re.fullmatch(
+        r'SUMIF\(\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)\s*,\s*"([^"]*)"\s*,\s*\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)\)',
+        expr,
+        re.IGNORECASE,
+    )
+    if m_sumif:
+        crit_col = openpyxl.utils.column_index_from_string(m_sumif.group(1).upper())
+        r_start = int(m_sumif.group(2))
+        r_end = int(m_sumif.group(4))
+        crit_val = m_sumif.group(5)
+        sum_col = openpyxl.utils.column_index_from_string(m_sumif.group(6).upper())
+        tot = 0.0
+        for rr in range(min(r_start, r_end), max(r_start, r_end) + 1):
+            cv = ws_f.cell(rr, crit_col).value
+            if str(cv if cv is not None else "") == crit_val:
+                v = ws_v.cell(rr, sum_col).value
+                if not isinstance(v, (int, float)):
+                    v = ws_f.cell(rr, sum_col).value
+                if isinstance(v, (int, float)):
+                    tot += float(v)
+        return tot
+
+    # Trường hợp SUM(A1:A10) hoặc SUM('Sheet'!A1:A10)
+    m_sum = re.fullmatch(r"SUM\((?:(?:'([^']+)'|([A-Za-z0-9_]+))!)?([A-Z]+\d+):([A-Z]+\d+)\)", expr, re.IGNORECASE)
+    if m_sum:
+        target_sheet = m_sum.group(1) or m_sum.group(2) or sheet_name
+        if target_sheet not in wb_f.sheetnames:
+            return 0.0
+        ws_tf = wb_f[target_sheet]
+        ws_tv = wb_v[target_sheet]
+        c1, r1 = openpyxl.utils.coordinate_to_tuple(m_sum.group(3).upper())
+        c2, r2 = openpyxl.utils.coordinate_to_tuple(m_sum.group(4).upper())
+        tot = 0.0
+        for rr in range(min(c1, c2), max(c1, c2) + 1):
+            for cc in range(min(r1, r2), max(r1, r2) + 1):
+                v = ws_tv.cell(rr, cc).value
+                if isinstance(v, (int, float)):
+                    tot += float(v)
+                else:
+                    vf = ws_tf.cell(rr, cc).value
+                    if isinstance(vf, (int, float)):
+                        tot += float(vf)
+        return tot
+
+    # Tách biểu thức cộng/trừ các tham chiếu ô: VD ='05-1'!R657-'05-1'!U657+'05-1'!V657 hoặc =C85+C87+C89
+    token_re = re.compile(r"([+-]?)\s*(?:(?:'([^']+)'|([A-Za-z0-9_]+))!)?([A-Z]+\d+)")
+    matches = list(token_re.finditer(expr))
+    if matches:
+        # Đảm bảo toàn bộ biểu thức chỉ gồm các token này và khoảng trắng
+        cleaned = token_re.sub("", expr).strip()
+        if not cleaned:
+            tot = 0.0
+            for m in matches:
+                sign = -1.0 if m.group(1) == "-" else 1.0
+                target_sheet = m.group(2) or m.group(3) or sheet_name
+                ref = m.group(4).upper()
+                tot += sign * _eval_simple_formula(wb_f, wb_v, target_sheet, ref, depth + 1)
+            return tot
+
+    return 0.0
 
 
-if __name__ == "__main__":
-    master_uploaded = r"C:\Users\Admin\.gemini\antigravity\brain\74addb61-c896-4052-bc3d-ededa129ccfc\.user_uploaded\media_1795273534206_4946e807.xlsx"
-    wb = openpyxl.load_workbook(master_uploaded, data_only=True)
-    m = compute_tq_metrics(wb["TQ"], 2020, 2025)
-    print("Verified TQ Metrics from Master File:")
-    print(f"  ĐK GTGT 2020: {m['dk_gtgt_qt_truoc']:,.0f} (QT 2015) + {m['dk_gtgt_c2_1912']:,.0f} (C2 1912) = {m['dk_gtgt_qt_truoc'] + m['dk_gtgt_c2_1912']:,.0f}")
-    print(f"  ĐK TNCN 2020: {m['dk_tncn_c2_1912']:,.0f} (C2 1912) + {m['dk_tncn_qt_2019']:,.0f} (QT 2019) = {m['dk_tncn_c2_1912'] + m['dk_tncn_qt_2019']:,.0f}")
-    for y in range(2020, 2026):
-        print(
-            f"  Năm {y}: GTGT TK={m['gtgt_tk_by_ky'][y]:,.0f}, C2={m['gtgt_c2_by_ht'][y]:,.0f} | "
-            f"TNCN (1001) TK+TH+TQ={m['tncn_tk_th_tq_by_ky'][y]:,.0f}, C2={m['tncn_c2_by_ht'][y]:,.0f}"
-        )
+def _eval_year_sheet_values(excel_path: str, years: List[int]) -> Dict[int, Dict[str, float]]:
+    """
+    Đọc giá trị đã tính sẵn (cached values) hoặc tính trực tiếp công thức trên các sheet năm
+    để so sánh chính xác C23 vs F23 và C90 vs F90 ngay cả khi file Excel mới xuất chưa mở bằng MS Excel.
+    """
+    wb_v = openpyxl.load_workbook(excel_path, data_only=True)
+    wb_f = openpyxl.load_workbook(excel_path, data_only=False)
+    result: Dict[int, Dict[str, float]] = {y: {"gtgt_c23": 0.0, "tncn_c90": 0.0, "tndn_c76": 0.0} for y in years}
 
-    targets = [
-        r"C:\Users\Admin\.gemini\antigravity\scratch\tax_xml_to_excel\TQ_QHNS_TongHop.xlsx",
-        r"D:\2026\MANY\TCS_MANY\TCS_MANY\TQ_QHNS_TongHop.xlsx",
-    ]
-    sync_master_workbook(master_uploaded, targets)
+    for y in years:
+        sname = str(y)
+        if sname not in wb_f.sheetnames:
+            continue
+        result[y]["gtgt_c23"] = _eval_simple_formula(wb_f, wb_v, sname, "C23")
+        result[y]["tncn_c90"] = _eval_simple_formula(wb_f, wb_v, sname, "C90")
+        result[y]["tndn_c76"] = _eval_simple_formula(wb_f, wb_v, sname, "C76")
+
+    return result
+
+
+def integrate_tq_and_qhns_into_workbook(
+    excel_path: str,
+    tq_excel_path: str,
+    so_nop_excel_path: Optional[str] = None,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Hàm tích hợp chính:
+    1. Đọc Sổ Tổng Quan (TQ) từ tq_excel_path và chèn vào workbook excel_path.
+    2. Cập nhật cột đối chiếu F & G kèm Comment trên các sheet Năm ('2020'..'2025') cho GTGT (Dòng 23) và TNCN (Dòng 90).
+    3. Sinh sheet QHNS chuẩn 01 biểu duy nhất theo đúng nghiệp vụ thanh tra - kiểm tra thuế.
+    4. Lưu ra output_path (mặc định ghi đè/cập nhật chính excel_path).
+    """
+    if output_path is None:
+        output_path = excel_path
+
+    # 1. Đọc file TQ nguồn
+    wb_tq = openpyxl.load_workbook(tq_excel_path, data_only=True)
+    ws_tq_src = None
+    for cand in wb_tq.sheetnames:
+        if cand.strip().upper() in ("TQ", "TONG QUAN", "TỔNG QUAN"):
+            ws_tq_src = wb_tq[cand]
+            break
+    if ws_tq_src is None:
+        ws_tq_src = wb_tq[wb_tq.sheetnames[0]]
+
+    tq_rows = parse_tq_rows(ws_tq_src)
+    if not tq_rows:
+        raise ValueError("Không tìm thấy dữ liệu giao dịch hợp lệ trong file Sổ Tổng Quan (TQ).")
+
+    # 2. Mở workbook tổng hợp tờ khai
+    wb = openpyxl.load_workbook(excel_path, data_only=False)
+
+    # Xác định danh sách năm cần lên QHNS
+    detected_years = sorted([int(s) for s in wb.sheetnames if re.fullmatch(r"20\d{2}", s)])
+    if year_from is not None and year_to is not None and year_from <= year_to:
+        years = list(range(year_from, year_to + 1))
+    elif detected_years:
+        years = detected_years
+    else:
+        ht_years = sorted({x["ht_year"] for x in tq_rows if 2015 <= x["ht_year"] <= 2035})
+        years = ht_years[-6:] if len(ht_years) > 6 else ht_years
+
+    start_year, end_year = years[0], years[-1]
+    metrics = compute_tq_metrics(tq_rows, start_year, end_year)
+    decl_vals = _eval_year_sheet_values(excel_path, years)
+
+    # 3. Chép sheet TQ vào workbook đích
+    _copy_tq_sheet(wb, ws_tq_src)
+
+    # 4. Cập nhật cột đối chiếu F, G và Comment trên từng sheet năm
+    num_fmt = "#,##0"
+    font_regular = Font(name="Times New Roman", size=11)
+    font_bold = Font(name="Times New Roman", size=11, bold=True)
+    alerts: List[str] = []
+
+    # Lưu trạng thái thiếu tờ khai trên TQ theo từng năm để quyết định công thức Cột (4) & Cột (5) trên QHNS
+    gtgt_missing_info: Dict[int, Optional[str]] = {}
+    tncn_missing_info: Dict[int, Optional[str]] = {}
+
+    for y in years:
+        sname = str(y)
+        if sname not in wb.sheetnames:
+            gtgt_missing_info[y] = None
+            tncn_missing_info[y] = None
+            continue
+        ws_y = wb[sname]
+
+        # --- Dòng 23: Thuế GTGT phải nộp trong kỳ ---
+        f23_val = round(metrics["gtgt_tk_by_ky"][y])
+        c23_val = round(decl_vals[y]["gtgt_c23"])
+        diff_gtgt = c23_val - f23_val
+
+        ws_y["F23"].value = f23_val
+        ws_y["F23"].number_format = num_fmt
+        ws_y["F23"].font = font_bold
+        ws_y["G23"].value = "=C23-F23"
+        ws_y["G23"].number_format = num_fmt
+        ws_y["G23"].font = font_bold
+
+        if diff_gtgt > 1000:
+            missing_p = sorted(metrics["gtgt_c2_periods"][y] - metrics["gtgt_tk_periods"][y])
+            miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
+            ws_y["F23"].comment = Comment(f"Phát sinh TK trên tổng quan rà soát thiếu TK {miss_str}", "QHNS")
+            gtgt_missing_info[y] = miss_str
+            alerts.append(f"Năm {y} - Thuế GTGT: Tờ khai ({c23_val:,.0f}) > Tổng quan ({f23_val:,.0f}), chênh lệch {diff_gtgt:,.0f} (thiếu TK {miss_str}).")
+        else:
+            ws_y["F23"].comment = Comment("Phát sinh TK trên tổng quan", "QHNS")
+            gtgt_missing_info[y] = None
+
+        # --- Dòng 90: Tổng hợp tổng số thuế TNCN phải khấu trừ ---
+        f90_val = round(metrics["tncn_tk_th_tq_by_ky"][y])
+        c90_val = round(decl_vals[y]["tncn_c90"])
+
+        # Nếu năm cuối (VD 2025) chưa có tờ khai Quyết toán 05/QTT-TNCN (C90 = 0) mà TQ có phát sinh -> lấy F90 vào C90
+        if c90_val == 0 and f90_val > 0:
+            ws_y["C90"].value = f90_val
+            ws_y["C90"].number_format = num_fmt
+            c90_val = f90_val
+
+        diff_tncn = c90_val - f90_val
+        ws_y["F90"].value = f90_val
+        ws_y["F90"].number_format = num_fmt
+        ws_y["F90"].font = font_bold
+        ws_y["G90"].value = "=C90-F90"
+        ws_y["G90"].number_format = num_fmt
+        ws_y["G90"].font = font_bold
+
+        if diff_tncn > 1000:
+            missing_p = sorted(metrics["tncn_c2_periods"][y] - metrics["tncn_tk_periods"][y])
+            miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
+            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ trên tổng quan rà soát thiếu TK {miss_str}", "QHNS")
+            tncn_missing_info[y] = miss_str
+            alerts.append(f"Năm {y} - Thuế TNCN: Tờ khai QTT ({c90_val:,.0f}) > Tổng quan ({f90_val:,.0f}), chênh lệch {diff_tncn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra (thiếu TK {miss_str}).")
+        else:
+            ws_y["F90"].comment = Comment("Phát sinh TK; TH; TQ trên tổng quan", "QHNS")
+            tncn_missing_info[y] = None
+
+        ws_y.column_dimensions["F"].width = 18
+        ws_y.column_dimensions["G"].width = 18
+
+    # 5. Xây dựng sheet QHNS chuẩn 01 biểu duy nhất
+    if "QHNS" in wb.sheetnames:
+        del wb["QHNS"]
+    ws_q = wb.create_sheet("QHNS")
+
+    thin = Side(style="thin", color="000000")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_fill = PatternFill("solid", fgColor="D9E1F2")
+    year_fill = PatternFill("solid", fgColor="F2F2F2")
+    font_hdr = Font(name="Times New Roman", size=11, bold=True)
+    font_year = Font(name="Times New Roman", size=11, bold=True, italic=True)
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    align_right = Alignment(horizontal="right", vertical="center")
+
+    # Header 3 dòng chuẩn mẫu QHNS
+    ws_q["A1"] = "STT"
+    ws_q["B1"] = "CHỈ TIÊU"
+    ws_q["C1"] = "Số kỳ trước chuyển sang"
+    ws_q["D1"] = "Số phát sinh trong kỳ"
+    ws_q["F1"] = "Số đã nộp"
+    ws_q["G1"] = "Số còn phải nộp"
+    ws_q["D2"] = "Số báo cáo phát sinh phải nộp trong kỳ"
+    ws_q["E2"] = "Số xử lý qua thanh tra"
+
+    ws_q.merge_cells("A1:A2")
+    ws_q.merge_cells("B1:B2")
+    ws_q.merge_cells("C1:C2")
+    ws_q.merge_cells("D1:E1")
+    ws_q.merge_cells("F1:F2")
+    ws_q.merge_cells("G1:G2")
+
+    col_nums = ["(1)", "(2)", "(3)", "(4)", "(5)", "(6)", "(7)=(3)+(4)+(5)-(6)"]
+    for idx, text in enumerate(col_nums, start=1):
+        ws_q.cell(3, idx, text)
+
+    for r in (1, 2, 3):
+        for c in range(1, 8):
+            cell = ws_q.cell(r, c)
+            cell.font = font_hdr
+            cell.alignment = align_center
+            cell.border = border_all
+            cell.fill = header_fill
+    ws_q.row_dimensions[1].height = 24
+    ws_q.row_dimensions[2].height = 32
+    ws_q.row_dimensions[3].height = 20
+
+    prev_rows: Dict[str, int] = {}
+    tncn_e_cells: List[str] = []
+    gtgt_e_cells: List[str] = []
+    cur_r = 4
+
+    for y_idx, y in enumerate(years):
+        sname = str(y)
+        has_sheet = sname in wb.sheetnames
+
+        # Dòng tiêu đề Năm
+        ws_q.cell(cur_r, 2, f"Năm {y}").font = font_year
+        for c in range(1, 8):
+            cell = ws_q.cell(cur_r, c)
+            cell.border = border_all
+            cell.fill = year_fill
+        r_year = cur_r
+        cur_r += 1
+
+        # 7 dòng sắc thuế của năm
+        rows_spec = [
+            ("gtgt", "1", "Thuế GTGT"),
+            ("gtgt_vl", "", "Thuế GTGT vãng lai"),
+            ("tndn", "2", "Thuế TNDN"),
+            ("tncn", "3", "Thuế TNCN"),
+            ("nt_tong", "4", "Thuế nhà thầu"),
+            ("nt_gtgt", "", "Trong đó:\n+ Thuế GTGT"),
+            ("nt_tndn", "", "+ Thuế TNDN"),
+        ]
+        this_rows: Dict[str, int] = {}
+        for key, stt, label in rows_spec:
+            this_rows[key] = cur_r
+            ws_q.cell(cur_r, 1, stt).alignment = align_center
+            ws_q.cell(cur_r, 2, label).alignment = align_left
+            for c in range(1, 8):
+                cell = ws_q.cell(cur_r, c)
+                cell.font = font_bold if key in ("gtgt", "tndn", "tncn", "nt_tong") else font_regular
+                cell.border = border_all
+                if c >= 3:
+                    cell.alignment = align_right
+                    cell.number_format = num_fmt
+            if key == "nt_gtgt":
+                ws_q.row_dimensions[cur_r].height = 30
+            cur_r += 1
+
+        # Điền công thức & số liệu cho từng dòng
+        # 1) Thuế GTGT
+        r_g = this_rows["gtgt"]
+        if y_idx == 0:
+            h_val = round(metrics["dk_gtgt_qt_truoc"])
+            i_val = round(metrics["dk_gtgt_c2_prev"])
+            ws_q.cell(r_g, 8, h_val).number_format = num_fmt
+            ws_q.cell(r_g, 9, i_val).number_format = num_fmt
+            ws_q.cell(r_g, 8).font = font_regular
+            ws_q.cell(r_g, 9).font = font_regular
+            if h_val != 0:
+                qt_note = ", ".join(metrics["dk_gtgt_qt_notes"]) or f"QT kỳ trước nộp trong kỳ kiểm tra"
+                ws_q.cell(r_g, 8).comment = Comment(f"Số nộp của {qt_note}", "QHNS")
+            if i_val != 0:
+                c2_note = ", ".join(metrics["dk_gtgt_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
+                ws_q.cell(r_g, 9).comment = Comment(f"Số nộp tháng {c2_note}", "QHNS")
+            ws_q.cell(r_g, 3, f"=H{r_g}+I{r_g}")
+        else:
+            ws_q.cell(r_g, 3, f"=G{prev_rows['gtgt']}")
+
+        if has_sheet:
+            if gtgt_missing_info.get(y):
+                ws_q.cell(r_g, 4, f"='{sname}'!F23")
+                ws_q.cell(r_g, 4).comment = Comment(
+                    f"Vì bị thiếu tờ khai {gtgt_missing_info[y]} nên số phát sinh trên tổng quan bị thiếu, nên khi thể hiện số phát sinh sẽ lấy trên tổng quan",
+                    "QHNS",
+                )
+                ws_q.cell(r_g, 5, f"='{sname}'!G23")
+                ws_q.cell(r_g, 5).comment = Comment(
+                    "Số chênh lệch thực tế trên tờ khai và phát sinh trên tổng quan do tờ khai bị thiếu",
+                    "QHNS",
+                )
+                gtgt_e_cells.append(f"E{r_g}")
+            else:
+                ws_q.cell(r_g, 4, f"='{sname}'!C23")
+        else:
+            ws_q.cell(r_g, 4, round(metrics["gtgt_tk_by_ky"][y]))
+
+        ws_q.cell(r_g, 6, round(metrics["gtgt_c2_by_ht"][y]))
+        if y_idx == 0:
+            ws_q.cell(r_g, 6).comment = Comment("GD C2 theo ngày hạch toán trên tổng quan", "QHNS")
+        ws_q.cell(r_g, 7, f"=C{r_g}+D{r_g}+E{r_g}-F{r_g}")
+
+        # 2) Thuế GTGT vãng lai
+        r_vl = this_rows["gtgt_vl"]
+        if y_idx > 0:
+            ws_q.cell(r_vl, 3, f"=G{prev_rows['gtgt_vl']}")
+        ws_q.cell(r_vl, 7, f"=C{r_vl}+D{r_vl}+E{r_vl}-F{r_vl}")
+
+        # 3) Thuế TNDN
+        r_td = this_rows["tndn"]
+        if y_idx == 0:
+            dk_td = round(metrics["dk_tndn_h"] + metrics["dk_tndn_i"])
+            if dk_td != 0:
+                ws_q.cell(r_td, 8, round(metrics["dk_tndn_h"])).number_format = num_fmt
+                ws_q.cell(r_td, 9, round(metrics["dk_tndn_i"])).number_format = num_fmt
+                ws_q.cell(r_td, 3, f"=H{r_td}+I{r_td}")
+        else:
+            ws_q.cell(r_td, 3, f"=G{prev_rows['tndn']}")
+
+        tndn_ps = round(metrics["tndn_tk_qt_by_ky"][y])
+        tndn_nop = round(metrics["tndn_c2_by_ht"][y])
+        if has_sheet and round(decl_vals[y]["tndn_c76"]) > 0:
+            ws_q.cell(r_td, 4, f"='{sname}'!C76")
+        elif tndn_ps > 0:
+            ws_q.cell(r_td, 4, tndn_ps)
+        if tndn_nop != 0:
+            ws_q.cell(r_td, 6, tndn_nop)
+        ws_q.cell(r_td, 7, f"=C{r_td}+D{r_td}+E{r_td}-F{r_td}")
+
+        # 4) Thuế TNCN
+        r_tn = this_rows["tncn"]
+        if y_idx == 0:
+            h_tn = round(metrics["dk_tncn_c2_prev"])
+            i_tn = round(metrics["dk_tncn_qt_prev"])
+            ws_q.cell(r_tn, 8, h_tn).number_format = num_fmt
+            ws_q.cell(r_tn, 9, i_tn).number_format = num_fmt
+            ws_q.cell(r_tn, 8).font = font_regular
+            ws_q.cell(r_tn, 9).font = font_regular
+            if h_tn != 0:
+                c2_tn_note = ", ".join(metrics["dk_tncn_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
+                ws_q.cell(r_tn, 8).comment = Comment(f"Kỳ kk {c2_tn_note} - Số nộp", "QHNS")
+            if i_tn != 0:
+                ws_q.cell(r_tn, 9).comment = Comment(f"Số nộp thừa trên QT {start_year - 1} (TQ + TH)", "QHNS")
+            ws_q.cell(r_tn, 3, f"=H{r_tn}+I{r_tn}")
+        else:
+            ws_q.cell(r_tn, 3, f"=G{prev_rows['tncn']}")
+
+        if has_sheet:
+            if tncn_missing_info.get(y):
+                ws_q.cell(r_tn, 4, f"='{sname}'!F90")
+                ws_q.cell(r_tn, 4).comment = Comment(
+                    f"Vì bị thiếu tờ khai {tncn_missing_info[y]} nên số phát sinh trên tổng quan bị thiếu, nên khi thể hiện số phát sinh sẽ lấy trên tổng quan",
+                    "QHNS",
+                )
+                ws_q.cell(r_tn, 5, f"='{sname}'!G90")
+                ws_q.cell(r_tn, 5).comment = Comment(
+                    "Số chênh lệch thực tế trên tờ khai và phát sinh trên tổng quan do tờ khai bị thiếu",
+                    "QHNS",
+                )
+                tncn_e_cells.append(f"E{r_tn}")
+            else:
+                ws_q.cell(r_tn, 4, f"='{sname}'!C90")
+        else:
+            ws_q.cell(r_tn, 4, round(metrics["tncn_tk_th_tq_by_ky"][y]))
+
+        ws_q.cell(r_tn, 6, round(metrics["tncn_c2_by_ht"][y]))
+        ws_q.cell(r_tn, 7, f"=C{r_tn}+D{r_tn}+E{r_tn}-F{r_tn}")
+
+        # 5) Thuế nhà thầu (Tổng + GTGT + TNDN)
+        r_nt = this_rows["nt_tong"]
+        r_nt_g = this_rows["nt_gtgt"]
+        r_nt_t = this_rows["nt_tndn"]
+        if y_idx > 0:
+            ws_q.cell(r_nt, 3, f"=G{prev_rows['nt_tong']}")
+            ws_q.cell(r_nt_g, 3, f"=G{prev_rows['nt_gtgt']}")
+            ws_q.cell(r_nt_t, 3, f"=G{prev_rows['nt_tndn']}")
+        ws_q.cell(r_nt, 7, f"=G{r_nt_g}+G{r_nt_t}")
+        ws_q.cell(r_nt_g, 7, f"=C{r_nt_g}+D{r_nt_g}+E{r_nt_g}-F{r_nt_g}")
+        ws_q.cell(r_nt_t, 7, f"=C{r_nt_t}+D{r_nt_t}+E{r_nt_t}-F{r_nt_t}")
+
+        # Nếu là năm cuối cùng và có khoản xử lý qua thanh tra (Cột E), đặt công thức đối chiếu ngược tại cột H
+        if y_idx == len(years) - 1:
+            if tncn_e_cells:
+                expr = "-".join(tncn_e_cells)
+                ws_q.cell(r_tn, 8, f"=G{r_tn}-{expr}").number_format = num_fmt
+                ws_q.cell(r_tn, 8).font = font_bold
+                ws_q.cell(r_tn, 8).comment = Comment(
+                    "Đối chiếu số dư cuối kỳ trên Sổ Tổng Quan (chưa cộng số xử lý qua thanh tra Cột 5)",
+                    "QHNS",
+                )
+            if gtgt_e_cells:
+                expr = "-".join(gtgt_e_cells)
+                ws_q.cell(r_g, 8, f"=G{r_g}-{expr}").number_format = num_fmt
+                ws_q.cell(r_g, 8).font = font_bold
+                ws_q.cell(r_g, 8).comment = Comment(
+                    "Đối chiếu số dư cuối kỳ trên Sổ Tổng Quan (chưa cộng số xử lý qua thanh tra Cột 5)",
+                    "QHNS",
+                )
+
+        prev_rows = this_rows
+
+    # Dòng Tổng cộng cuối bảng QHNS
+    r_tot = cur_r
+    ws_q.cell(r_tot, 2, "TỔNG CỘNG").font = font_hdr
+    ws_q.cell(r_tot, 4, f"=SUM(D5:D{r_tot - 1})")
+    ws_q.cell(r_tot, 5, f"=SUM(E5:E{r_tot - 1})")
+    ws_q.cell(r_tot, 6, f"=SUM(F5:F{r_tot - 1})")
+    for c in range(1, 8):
+        cell = ws_q.cell(r_tot, c)
+        cell.font = font_hdr
+        cell.border = border_all
+        if c >= 3:
+            cell.alignment = align_right
+            cell.number_format = num_fmt
+
+    # Độ rộng cột chuẩn đẹp
+    col_widths = {1: 6, 2: 28, 3: 18, 4: 18, 5: 18, 6: 18, 7: 20, 8: 16, 9: 16}
+    for c_idx, w in col_widths.items():
+        ws_q.column_dimensions[get_column_letter(c_idx)].width = w
+
+    wb.save(output_path)
+
+    return {
+        "output_path": output_path,
+        "years": years,
+        "alerts": alerts,
+        "metrics": metrics,
+    }
