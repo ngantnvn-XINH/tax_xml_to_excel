@@ -2161,16 +2161,33 @@ def write_gtgt_timeline_sheet(
     ws.freeze_panes = "H3"
 
 
+def detect_tndn_fiscal_ranges(tndn_decls: List[TaxDeclaration]) -> Dict[int, Tuple[datetime.date, datetime.date]]:
+    """
+    Tự động phát hiện doanh nghiệp có năm tài chính lệch năm dương lịch từ tờ khai 03/TNDN
+    (VD: 01/04/2019 - 31/03/2020 cho năm tính thuế 2019).
+    Trả về dict {year: (tu_ngay, den_ngay)} nếu có lệch kỳ; ngược lại trả về {}.
+    """
+    ranges: Dict[int, Tuple[datetime.date, datetime.date]] = {}
+    has_offset = False
+    for d in tndn_decls:
+        if d.year and d.tu_ngay and d.den_ngay:
+            ranges[d.year] = (d.tu_ngay, d.den_ngay)
+            if d.tu_ngay.month != 1 or d.den_ngay.month != 12 or d.tu_ngay.year != d.den_ngay.year:
+                has_offset = True
+    return ranges if has_offset else {}
+
+
 def write_gtgt_cuoi_sheet(
     wb: openpyxl.Workbook,
     declarations: List[TaxDeclaration],
     existing_sheets: Set[str],
     sheet_name: str = "So Thue GTGT Cuoi",
+    fiscal_ranges: Optional[Dict[int, Tuple[datetime.date, datetime.date]]] = None,
 ) -> None:
     """
-    Sheet 'So Thue GTGT Cuoi':
+    Sheet 'So Thue GTGT Cuoi' (hoặc 'So Thue GTGT Cuoi (Lech ky)' khi có fiscal_ranges):
     - Với mỗi kỳ kê khai thuế (tháng/quý), chỉ lấy tờ khai CUỐI CÙNG có hiệu lực (lần bổ sung cao nhất).
-    - Gom nhóm các kỳ theo từng NĂM.
+    - Gom nhóm các kỳ theo từng NĂM (hoặc theo NĂM TÀI CHÍNH lệch kỳ của TNDN nếu fiscal_ranges được cung cấp).
     - Cuối mỗi năm, có dòng TỔNG CỘNG NĂM {NĂM} dùng công thức =SUM(...) tính tổng số liệu cả năm.
     - Dưới cùng có dòng TỔNG CỘNG TẤT CẢ CÁC NĂM.
     """
@@ -2202,9 +2219,29 @@ def write_gtgt_cuoi_sheet(
         dlist.sort(key=sort_key_p)
         latest_per_period.append(dlist[-1])
 
+    # Nếu có năm tài chính lệch kỳ, xác định tháng bắt đầu phổ biến (VD: tháng 4) để gom các kỳ nằm ngoài khoảng TNDN
+    default_start_month = 1
+    if fiscal_ranges:
+        start_months = [r_start.month for r_start, _ in fiscal_ranges.values()]
+        if start_months:
+            default_start_month = max(set(start_months), key=start_months.count)
+
+    def resolve_group_year(d: TaxDeclaration) -> int:
+        if not fiscal_ranges:
+            return d.year or 0
+        ref_date = d.tu_ngay or d.den_ngay
+        if ref_date:
+            for f_yr, (f_start, f_end) in fiscal_ranges.items():
+                if f_start <= ref_date <= f_end:
+                    return f_yr
+            # Suy luận theo tháng bắt đầu năm tài chính (VD tháng 4: 04/2019..03/2020 -> năm 2019)
+            if default_start_month > 1:
+                return ref_date.year if ref_date.month >= default_start_month else (ref_date.year - 1)
+        return d.year or 0
+
     grouped_by_year: Dict[int, List[TaxDeclaration]] = {}
     for d in latest_per_period:
-        yr = d.year or 0
+        yr = resolve_group_year(d)
         grouped_by_year.setdefault(yr, []).append(d)
 
     ws.append([c[0] for c in GTGT_COLS_SPEC])
@@ -2274,7 +2311,12 @@ def write_gtgt_cuoi_sheet(
             cell.fill = SECTION_FILL
             cell.border = THIN_BORDER
 
-        ws.cell(sum_row, 5, f"Tổng cộng năm {yr}").alignment = Alignment(horizontal="left", vertical="center")
+        if fiscal_ranges and yr in fiscal_ranges:
+            f_s, f_e = fiscal_ranges[yr]
+            yr_label = f"Tổng cộng năm {yr} ({f_s.strftime('%m/%Y')}-{f_e.strftime('%m/%Y')})"
+        else:
+            yr_label = f"Tổng cộng năm {yr}"
+        ws.cell(sum_row, 5, yr_label).alignment = Alignment(horizontal="left", vertical="center")
         ws.cell(sum_row, 7, f"Tổng {yr}").alignment = Alignment(horizontal="center", vertical="center")
 
         for col_idx in range(13, len(GTGT_COLS_SPEC) + 1):
@@ -2323,17 +2365,24 @@ def write_sheet_chenh_lech_gtgt_tndn(
     gtgt_sheet_name: str = "So Thue GTGT Cuoi",
     kqkd_sheet_name: str = "BCHDKD",
     sheet_name: str = "Chenh lech thue GTGT - TNDN",
+    fiscal_ranges: Optional[Dict[int, Tuple[datetime.date, datetime.date]]] = None,
 ) -> Optional[str]:
     """
-    Tạo sheet bảng so sánh giữa doanh thu tính thuế GTGT hàng năm (lấy từ sheet 'So Thue GTGT Cuoi')
+    Tạo sheet bảng so sánh giữa doanh thu tính thuế GTGT hàng năm (lấy từ sheet 'So Thue GTGT Cuoi'
+    hoặc 'So Thue GTGT Cuoi (Lech ky)' nếu doanh nghiệp có năm tài chính lệch năm dương lịch)
     và doanh thu tính thuế TNDN trên báo cáo hoạt động sản xuất kinh doanh ('BCHDKD').
     Tự động dò tọa độ dòng của từng chỉ tiêu trên từng khối cột của 'BCHDKD' để không bao giờ lệch dòng.
     """
     actual_gtgt_sheet = None
     for s in wb.sheetnames:
-        if s.strip().lower() == gtgt_sheet_name.strip().lower() or "so thue gtgt cuoi" in s.lower():
+        if s.strip().lower() == gtgt_sheet_name.strip().lower():
             actual_gtgt_sheet = s
             break
+    if actual_gtgt_sheet is None:
+        for s in wb.sheetnames:
+            if "so thue gtgt cuoi" in s.lower():
+                actual_gtgt_sheet = s
+                break
 
     actual_kqkd_sheet = None
     for s in wb.sheetnames:
@@ -2437,8 +2486,13 @@ def write_sheet_chenh_lech_gtgt_tndn(
         ws.row_dimensions[cur_row].height = 22
         r_dt, r_gt, r_tnk = kqkd_year_rows.get(yr, (5, 7, 20))
 
-        # Cột A: Năm
-        cA = ws.cell(cur_row, 1, yr)
+        # Cột A: Năm (hiển thị kèm kỳ tài chính nếu doanh nghiệp lệch kỳ, VD: 2019 (04/2019-03/2020))
+        if fiscal_ranges and yr in fiscal_ranges:
+            f_s, f_e = fiscal_ranges[yr]
+            col_a_val: Any = f"{yr} ({f_s.strftime('%m/%Y')}-{f_e.strftime('%m/%Y')})"
+        else:
+            col_a_val = yr
+        cA = ws.cell(cur_row, 1, col_a_val)
         cA.font = body_font
         cA.alignment = Alignment(horizontal="center", vertical="center")
         cA.border = THIN_BORDER
@@ -2541,7 +2595,7 @@ def write_sheet_chenh_lech_gtgt_tndn(
         c_sum.border = THIN_BORDER
 
     col_widths = {
-        "A": 10,
+        "A": 24 if fiscal_ranges else 10,
         "B": 24,
         "C": 20,
         "D": 22,
@@ -3490,8 +3544,10 @@ def _populate_workbook_sheets(
     write_summary_sheet(wb, all_decls, existing_sheets)
 
     tndn_items = [d for d in valid_decls if d.tax_type == "TNDN"]
+    fiscal_ranges: Dict[int, Tuple[datetime.date, datetime.date]] = {}
     if tndn_items:
         latest_tndn = filter_latest_per_year(tndn_items)
+        fiscal_ranges = detect_tndn_fiscal_ranges(latest_tndn)
         write_sheet_kktndn(wb, latest_tndn, existing_sheets)
         write_sheet_kqkd(wb, latest_tndn, existing_sheets)
 
@@ -3511,9 +3567,22 @@ def _populate_workbook_sheets(
     if gtgt_items:
         write_gtgt_timeline_sheet(wb, gtgt_items, existing_sheets, sheet_name="So Thue GTGT TH")
         write_gtgt_cuoi_sheet(wb, gtgt_items, existing_sheets, sheet_name="So Thue GTGT Cuoi")
+        if fiscal_ranges:
+            write_gtgt_cuoi_sheet(
+                wb,
+                gtgt_items,
+                existing_sheets,
+                sheet_name="So Thue GTGT Cuoi (Lech ky)",
+                fiscal_ranges=fiscal_ranges,
+            )
 
     if gtgt_items or tndn_items:
-        write_sheet_chenh_lech_gtgt_tndn(wb, existing_sheets)
+        write_sheet_chenh_lech_gtgt_tndn(
+            wb,
+            existing_sheets,
+            gtgt_sheet_name="So Thue GTGT Cuoi (Lech ky)" if (gtgt_items and fiscal_ranges) else "So Thue GTGT Cuoi",
+            fiscal_ranges=fiscal_ranges or None,
+        )
 
     if gtgt_items or tndn_items or tncn_items:
         write_yearly_verification_sheets(wb, existing_sheets)
