@@ -317,12 +317,18 @@ def write_sheet_kktndn(
     internal_lookup_only_codes = {"ten_loaiMien", "thueTNDN_tamnop_sxkd", "thueTNDN_tamnop_cnbds"}
 
     def write_kktndn_block(c_start: int, decls: List[TaxDeclaration], catalog: List[Tuple[str, str, str]]) -> int:
+        from openpyxl.comments import Comment as _Comment
         c_end = c_start + 2 + len(decls)
         for idx, d in enumerate(decls):
             c_yr = ws.cell(1, c_start + 3 + idx, d.year or d.ky_kkhai)
             c_yr.font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
             c_yr.alignment = Alignment(horizontal="center", vertical="center")
             c_yr.border = THIN_BORDER
+            nlap_str = d.ngay_lap.strftime("%d/%m/%Y") if d.ngay_lap else ""
+            c_yr.comment = _Comment(
+                f"Loại: {d.loai_to_khai}\nNgày lập: {nlap_str}\nFile: {d.file_name}",
+                "TaxXML",
+            )
 
         ws.cell(2, c_start, "STT")
         ws.cell(2, c_start + 1, "Chỉ tiêu")
@@ -456,12 +462,18 @@ def write_sheet_kqkd(
         catalog: List[Tuple[str, str, str]],
         title_text: str,
     ) -> int:
+        from openpyxl.comments import Comment as _Comment
         c_end = c_start + 2 + len(decls)
         for idx, d in enumerate(decls):
             c_yr = ws.cell(1, c_start + 3 + idx, d.year or d.ky_kkhai)
             c_yr.font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
             c_yr.alignment = Alignment(horizontal="center", vertical="center")
             c_yr.border = THIN_BORDER
+            nlap_str = d.ngay_lap.strftime("%d/%m/%Y") if d.ngay_lap else ""
+            c_yr.comment = _Comment(
+                f"Loại: {d.loai_to_khai}\nNgày lập: {nlap_str}\nFile: {d.file_name}",
+                "TaxXML",
+            )
 
         ws.cell(2, c_start, "STT")
         ws.cell(2, c_start + 1, "Chỉ tiêu")

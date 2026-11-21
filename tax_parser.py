@@ -767,7 +767,16 @@ def parse_tax_xml(file_path: str) -> TaxDeclaration:
     mo_ta_bmau = find_descendant_text(tkhai_thue, "moTaBMau")
     ten_cqt = find_descendant_text(tkhai_thue, "tenCQTNoiNop")
     ma_cqt = find_descendant_text(tkhai_thue, "maCQTNoiNop")
-    so_lan = find_descendant_text(tkhai_thue, "soLan")
+    so_lan = (
+        find_descendant_text(tkhai_thue, "soLan")
+        or find_descendant_text(tkhai_thue, "soLanBoSung")
+        or find_descendant_text(tkhai_thue, "soLanBSung")
+        or find_descendant_text(tkhai_thue, "lanBoSung")
+        or find_descendant_text(tkhai_thue, "lanBSung")
+    )
+    loai_tkhai_code = find_descendant_text(tkhai_thue, "loaiTKhai").strip().upper()
+    if loai_tkhai_code == "B" and (not so_lan or so_lan == "0"):
+        so_lan = "1"
 
     ky_node = find_child(tkhai_thue, "KyKKhaiThue")
     ky_kkhai = find_descendant_text(ky_node, "kyKKhai")

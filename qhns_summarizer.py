@@ -171,13 +171,16 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
     c2_is_negative = bool(c2_vals and sum(1 for v in c2_vals if v < 0) >= len(c2_vals) / 2)
 
     def payment_amount(item: Dict[str, Any]) -> float:
-        # Trả về số tiền nộp mang dấu dương cho C2; nếu HC (hủy chứng từ) thì ngược dấu C2
+        """
+        Trả về số tiền nộp (dương = nộp vào NSNN, âm = hủy/điều chỉnh giảm số nộp).
+        Bảo toàn tuyệt đối dấu đại số của giao dịch C2, NT, HC trên Sổ Tổng Quan (TQ)
+        (tuyệt đối không dùng abs() làm mất dấu âm của chứng từ điều chỉnh/chứng từ âm BK).
+        """
         val = item["so_tien"]
-        if c2_is_negative:
-            return -val
-        if item["gd"] == "HC":
-            return -abs(val)
-        return abs(val)
+        no_co = item.get("no_co", "")
+        if no_co in ("C", "N") and not c2_is_negative and val >= 0:
+            return val if no_co == "C" else -val
+        return -val if c2_is_negative else val
 
     for item in tq_rows:
         tm = item["tm"]
