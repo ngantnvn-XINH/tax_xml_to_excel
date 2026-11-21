@@ -1217,9 +1217,11 @@ def integrate_tq_and_qhns_into_workbook(
     for c_idx, w in dc_widths.items():
         ws_dc.column_dimensions[get_column_letter(c_idx)].width = w
 
-    # Cập nhật / bổ sung sheet biểu tính tiền chậm nộp & xử phạt VPHC sau thanh kiểm tra
+    # Cập nhật / bổ sung sheet biểu tính tiền chậm nộp & xử phạt VPHC và Báo cáo tổng hợp Biên bản
     from penalty_calculator import add_late_payment_sheet
+    from report_builder import add_audit_report_sheet
     add_late_payment_sheet(wb, years=years, cutoff_date=cutoff_date)
+    add_audit_report_sheet(wb, years=years)
 
     wb.save(output_path)
 

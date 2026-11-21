@@ -200,7 +200,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
             out_master_tncn = os.path.join(tmpdir, "TongHop_TNCN_HaiThongTu.xlsx")
             export_to_excel([d2020, decls[1]], out_master_tncn, include_appendices=False, split_by_tax_type=False)
             wb_master_tncn = openpyxl.load_workbook(out_master_tncn)
-            self.assertEqual(wb_master_tncn.sheetnames, ["Tong_hop_File", "TNCN", "2020", "2024", "Tinh_TienChamNop"])
+            self.assertEqual(wb_master_tncn.sheetnames, ["Tong_hop_File", "TNCN", "2020", "2024", "Tinh_TienChamNop", "BaoCao_BienBan"])
             ws_master = wb_master_tncn["TNCN"]
             self.assertEqual(ws_master["G1"].value, 2020)
             self.assertEqual(ws_master["G3"].value, 70)
@@ -873,6 +873,56 @@ class TestTaxXmlToExcel(unittest.TestCase):
 
         # Kiểm tra số ngày chậm nộp 2023-06-21 đến 2026-09-15 đúng 1183 ngày như mẫu thực tế
         self.assertEqual((datetime.date(2026, 9, 15) - datetime.date(2023, 6, 21)).days + 1, 1183)
+
+    def test_v14_audit_report_sheet_links(self) -> None:
+        """Kiểm thử v1.4: Sheet BaoCao_BienBan tự động cài sẵn công thức liên kết đủ 10 bảng từ các sheet năm và Tinh_TienChamNop."""
+        import datetime
+        from penalty_calculator import add_late_payment_sheet
+        from report_builder import add_audit_report_sheet
+
+        wb = openpyxl.Workbook()
+        ws23 = wb.active
+        ws23.title = "2023"
+        wb.create_sheet("2024")
+        wb.create_sheet("2025")
+
+        add_late_payment_sheet(wb, years=[2023, 2024, 2025], cutoff_date=datetime.date(2026, 9, 15))
+        ws_rep = add_audit_report_sheet(wb, years=[2023, 2024, 2025])
+
+        all_formulas = [
+            str(ws_rep.cell(r, c).value or "")
+            for r in range(1, ws_rep.max_row + 1)
+            for c in range(1, 9)
+        ]
+        # Kiểm tra liên kết trực tiếp tới các sheet năm cho đủ 9 bảng chi tiết
+        for expected_ref in (
+            "='2023'!C14",
+            "='2024'!C3+'2024'!C18",
+            "='2025'!C20",
+            "='2025'!C19",
+            "='2025'!C23",
+            "='2025'!D24",
+            "='2025'!C60",
+            "='2024'!C73+'2024'!C74",
+            "='2025'!C76",
+            "='2023'!C84+'2023'!C86+'2023'!C88",
+            "='2023'!C90",
+            "='2023'!C95",
+            "='2023'!C97",
+            "='2023'!C98",
+        ):
+            self.assertIn(expected_ref, all_formulas, f"Thiếu công thức liên kết {expected_ref} trên BaoCao_BienBan")
+
+        # Kiểm tra Bảng 10 liên kết sang 'Tinh_TienChamNop' cho Tiền chậm nộp, Phạt 20%, Trốn thuế, VPHC
+        pen_links = [f for f in all_formulas if "'Tinh_TienChamNop'!" in f]
+        self.assertGreaterEqual(len(pen_links), 15)
+
+        # Kiểm tra dòng 18 (Giảm GTGT khấu trừ chuyển kỳ sau) & dòng 19 (Giảm lỗ chuyển kỳ sau)
+        labels = {str(ws_rep.cell(r, 2).value or ""): str(ws_rep.cell(r, 3).value or "") for r in range(1, ws_rep.max_row + 1)}
+        self.assertIn("Giảm số thuế GTGT còn được khấu trừ chuyển kỳ sau", labels)
+        self.assertTrue(labels["Giảm số thuế GTGT còn được khấu trừ chuyển kỳ sau"].startswith("=MAX(0,-H"))
+        self.assertIn("Giảm lỗ chuyển kỳ sau", labels)
+        self.assertIn("MIN(ABS(", labels["Giảm lỗ chuyển kỳ sau"])
 
 
 if __name__ == "__main__":

@@ -3600,11 +3600,13 @@ def _populate_workbook_sheets(
     if gtgt_items or tndn_items or tncn_items:
         write_yearly_verification_sheets(wb, existing_sheets)
         from penalty_calculator import add_late_payment_sheet
+        from report_builder import add_audit_report_sheet
         add_late_payment_sheet(
             wb,
             cutoff_date=cutoff_date,
             fiscal_ranges=fiscal_ranges or None,
         )
+        add_audit_report_sheet(wb)
 
     other_items = [d for d in valid_decls if d.tax_type == "Khác"]
     if other_items:

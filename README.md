@@ -3,6 +3,8 @@
 Công cụ ETL (Extract – Transform – Load) chuyên dụng giúp đọc, làm sạch, chuẩn hóa và tổng hợp **100% dữ liệu từ hồ sơ khai thuế XML (HTKK / eTax)** sang file Excel chuẩn mẫu kế toán - thanh tra, kiểm tra thuế.
 
 ## Tính năng nổi bật (Phiên bản v1.4)
+- **Tự động lập Báo cáo tổng hợp số liệu đưa vào Biên bản kiểm tra (`BaoCao_BienBan`):**
+  - Cài sẵn **100% công thức Excel liên kết tự động** từ các sheet Năm (`2020`..`2025`...) và `Tinh_TienChamNop` qua đủ 10 bảng: Thuế GTGT đầu ra, GTGT khấu trừ kỳ trước & đầu vào, Điều chỉnh tăng/giảm khấu trừ, Tổng hợp GTGT phải nộp & còn được khấu trừ, Thu nhập chịu thuế, Thuế TNDN ưu đãi miễn giảm, Thuế TNDN phải nộp, Thu nhập & Thuế TNCN, Thuế Nhà thầu nước ngoài, và Bảng Kết luận tổng hợp (Truy thu chi tiết từng năm, Tiền chậm nộp, Phạt 20%, Phạt trốn thuế, Phạt VPHC thủ tục, Giảm thuế GTGT khấu trừ chuyển kỳ sau & Giảm lỗ chuyển kỳ sau).
 - **Tự động lập Biểu tính tiền truy thu, xử phạt VPHC & tiền chậm nộp (`Tinh_TienChamNop`):**
   - **1 ô điều khiển trung tâm (`D4`):** Chỉ cần sửa ngày lập biên bản tại ô `D4` (hoặc nhập sẵn trên giao diện `app.py`) để tự động tính lại số ngày chậm nộp, tiền chậm nộp và kiểm tra thời hiệu cho toàn bảng.
   - **Đa giai đoạn tỷ lệ chậm nộp:** Tự động tách số ngày đến hết `30/06/2016` (`0,05%/ngày` theo Luật 71/2014/QH14) và từ `01/07/2016` trở đi (`0,03%/ngày` theo Luật 106/2016/QH13 & Khoản 2 Điều 59 Luật QLT 38/2019/QH14).
@@ -44,6 +46,7 @@ python test_app.py
 - `SO_TAY_NGHIEP_VU_QHNS.md`: **Sổ tay nghiệp vụ chuẩn** lưu trữ toàn bộ quy tắc đối chiếu giữa Tờ khai thuế (`GTGT`, `TNDN`, `TNCN`, `Nhà thầu`) với Sổ Tổng Quan (`TQ`) trên hệ thống TMS và cách lập biểu **Quan Hệ Ngân Sách (`QHNS`)** khớp tuyệt đối với số dư cuối cùng của năm tài chính.
 - `qhns_summarizer.py`: Module đối chiếu dữ liệu Sổ Tổng Quan (`TQ`), kiểm tra chênh lệch Tờ khai vs Tổng quan (`F23/G23`, `F76/G76`, `F90/G90`) và tổng hợp 2 biểu `QHNS` & `DoiChieu_QHNS`.
 - `penalty_calculator.py`: Module sinh sheet `Tinh_TienChamNop` (biểu tính thuế truy thu, phạt khai sai 20%, phạt trốn thuế 1–3 lần, phạt VPHC thủ tục và tiền chậm nộp đa giai đoạn kèm kiểm tra thời hiệu 5/10 năm).
+- `report_builder.py`: Module sinh sheet `BaoCao_BienBan` (báo cáo tổng hợp 10 bảng đưa vào Biên bản kiểm tra, tự động cài công thức liên kết từ các sheet năm và `Tinh_TienChamNop`).
 - `payment_summarizer.py`: Module tổng hợp sổ nộp ngân sách (`so_nop.xlsx`) theo Năm Ngày nộp thuế và Tiểu mục.
 - `tax_Extractor_app.py` / `app.py`: Giao diện người dùng Desktop.
 - `xml_parser.py` / `tax_parser.py`: Bộ phân tích cú pháp & trích xuất dữ liệu XML thuế (Extract).
