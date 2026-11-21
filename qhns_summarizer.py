@@ -220,17 +220,26 @@ def populate_tq_and_qhns(
             else:
                 if yr == 2020:
                     if tax_code == "GTGT":
-                        f_dk = f"=-SUMIFS({rng_val},{rng_tm},\"1701\",{rng_kh},\"C2\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                        f_dk = (
+                            f"=-SUMIFS({rng_val},{rng_tm},\"1701\",{rng_kh},\"C2\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                            f"+SUMIFS({rng_val},{rng_tm},\"1701\",{rng_kh},\"QT\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                        )
                     elif tax_code == "TNDN":
-                        f_dk = f"=-SUMIFS({rng_val},{rng_tm},\"1052\",{rng_kh},\"C2\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                        f_dk = (
+                            f"=-SUMIFS({rng_val},{rng_tm},\"1052\",{rng_kh},\"C2\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                            f"+SUMIFS({rng_val},{rng_tm},\"1052\",{rng_kh},\"QT\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                        )
                     else:
-                        f_dk = f"=-SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"C2\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                        f_dk = (
+                            f"=-SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"C2\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                            f"+SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"QT\",{rng_ky},\"<=2019\",{rng_ht},\">=2020\",{rng_ht},\"<=2025\")"
+                        )
                 else:
                     f_dk = f"=G{prev_rows[tax_code]}"
 
                 if tax_code == "GTGT":
                     f_ps = f"=SUMIFS({rng_val},{rng_tm},\"1701\",{rng_kh},\"TK\",{rng_ky},{yr})"
-                    f_tt = f"=SUMIFS({rng_val},{rng_tm},\"1701\",{rng_kh},\"QT\",{rng_ht},{yr})"
+                    f_tt = f"=SUMIFS({rng_val},{rng_tm},\"1701\",{rng_kh},\"QT\",{rng_ky},{yr})"
                     f_nop = f"=-SUMIFS({rng_val},{rng_tm},\"1701\",{rng_kh},\"C2\",{rng_ht},{yr})"
                 elif tax_code == "TNDN":
                     f_ps = (
@@ -245,7 +254,7 @@ def populate_tq_and_qhns(
                         f"+SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"TQ\",{rng_ky},{yr})"
                         f"+SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"TH\",{rng_ky},{yr})"
                     )
-                    f_tt = f"=SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"QT\",{rng_ht},{yr})"
+                    f_tt = f"=SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"QT\",{rng_ky},{yr})"
                     f_nop = f"=-SUMIFS({rng_val},{rng_sac},\"TNCN\",{rng_kh},\"C2\",{rng_ht},{yr})"
 
             f_ck = f"=C{r_cur}+D{r_cur}+E{r_cur}-F{r_cur}"
