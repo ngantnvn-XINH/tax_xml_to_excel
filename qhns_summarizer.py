@@ -401,7 +401,7 @@ def _eval_simple_formula(
     Đánh giá nhanh các công thức Excel cơ bản (=SUM(...), ='Sheet'!A1, cộng/trừ ô)
     để so sánh chính xác ngay cả khi file Excel vừa sinh bằng openpyxl chưa được mở bằng MS Excel.
     """
-    if depth > 8 or sheet_name not in wb_f.sheetnames:
+    if depth > 20 or sheet_name not in wb_f.sheetnames:
         return 0.0
     ws_v = wb_v[sheet_name]
     cached = ws_v[cell_ref].value
@@ -440,6 +440,20 @@ def _eval_simple_formula(
                     tot += float(v)
         return tot
 
+    # Trường hợp IF(C71>0,ROUND(C71*0.2,0),0) (dòng C72 Thuế TNDN trên sheet năm)
+    m_if_round = re.fullmatch(
+        r"IF\(\s*([A-Z]+\d+)\s*>\s*0\s*,\s*ROUND\(\s*([A-Z]+\d+)\s*\*\s*([0-9.]+)\s*,\s*0\s*\)\s*,\s*0\s*\)",
+        expr,
+        re.IGNORECASE,
+    )
+    if m_if_round:
+        cond_val = _eval_simple_formula(wb_f, wb_v, sheet_name, m_if_round.group(1).upper(), depth + 1)
+        if cond_val > 0:
+            base_val = _eval_simple_formula(wb_f, wb_v, sheet_name, m_if_round.group(2).upper(), depth + 1)
+            rate = float(m_if_round.group(3))
+            return float(round(base_val * rate))
+        return 0.0
+
     # Trường hợp SUM(A1:A10) hoặc SUM('Sheet'!A1:A10)
     m_sum = re.fullmatch(r"SUM\((?:(?:'([^']+)'|([A-Za-z0-9_]+))!)?([A-Z]+\d+):([A-Z]+\d+)\)", expr, re.IGNORECASE)
     if m_sum:
@@ -460,6 +474,9 @@ def _eval_simple_formula(
                     vf = ws_tf.cell(rr, cc).value
                     if isinstance(vf, (int, float)):
                         tot += float(vf)
+                    elif isinstance(vf, str) and vf.startswith("="):
+                        sub_ref = f"{get_column_letter(cc)}{rr}"
+                        tot += _eval_simple_formula(wb_f, wb_v, target_sheet, sub_ref, depth + 1)
         return tot
 
     # Tách biểu thức cộng/trừ các tham chiếu ô: VD ='05-1'!R657-'05-1'!U657+'05-1'!V657 hoặc =C85+C87+C89
@@ -700,6 +717,7 @@ def integrate_tq_and_qhns_into_workbook(
     special_nop_notes = metrics.get("special_nop_notes", {})
     opening_bb: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0}
     rounding_diff: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0}
+    rounding_diff_refs: Dict[str, List[str]] = {"1701": [], "1052": [], "1001": [], "LPMB": []}
     last_rows: Dict[str, int] = {}
     cur_r = 4
 
@@ -955,17 +973,21 @@ def integrate_tq_and_qhns_into_workbook(
         ws_q.cell(r_mb, 7, f"=C{r_mb}+D{r_mb}+E{r_mb}-F{r_mb}")
 
         # Cộng dồn chênh lệch nhỏ (làm tròn tờ khai vs TQ) cho các năm không tách sang Cột E
+        # Lưu cả danh sách tham chiếu ô G23/G76/G90 trên từng sheet năm để dùng công thức động trên DoiChieu_QHNS
         if has_sheet:
             if not gtgt_missing_info.get(y):
                 rounding_diff["1701"] += round(decl_vals[y]["gtgt_c23"]) - round(metrics["gtgt_tk_by_ky"][y])
+                rounding_diff_refs["1701"].append(f"'{sname}'!G23")
             if not tndn_missing_info.get(y):
                 rounding_diff["1052"] += round(decl_vals[y]["tndn_c76"]) - round(metrics["tndn_tk_qt_by_ky"][y])
+                rounding_diff_refs["1052"].append(f"'{sname}'!G76")
             if not tncn_missing_info.get(y):
                 c90_eff = round(decl_vals[y]["tncn_c90"])
                 f90_eff = round(metrics["tncn_tk_th_tq_by_ky"][y])
                 if c90_eff == 0 and f90_eff > 0:
                     c90_eff = f90_eff
                 rounding_diff["1001"] += c90_eff - f90_eff
+                rounding_diff_refs["1001"].append(f"'{sname}'!G90")
 
         # Nếu là năm cuối cùng và có khoản xử lý qua thanh tra (Cột E), đặt công thức đối chiếu ngược tại cột H
         if y_idx == len(years) - 1:
@@ -1171,7 +1193,11 @@ def integrate_tq_and_qhns_into_workbook(
                 ws_dc.cell(dc_r, 5, f"={e_sum_expr}")
             else:
                 ws_dc.cell(dc_r, 5, 0)
-            ws_dc.cell(dc_r, 6, rdiff_val)
+            rdiff_refs = rounding_diff_refs.get(tm_key, [])
+            if rdiff_refs:
+                ws_dc.cell(dc_r, 6, "=" + "+".join(rdiff_refs))
+            else:
+                ws_dc.cell(dc_r, 6, rounding_diff[tm_key])
         else:
             # Sắc thuế/tiểu mục khác (Phạt, Tiền chậm nộp, TNCN khác...): đối chiếu trực tiếp từ Bảng 2
             ws_dc.cell(dc_r, 3, 0)

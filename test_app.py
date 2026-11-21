@@ -767,8 +767,9 @@ class TestTaxXmlToExcel(unittest.TestCase):
             # Bảng 1 Đối chiếu: GTGT (row 3) có D3 = -2,000,000 (nộp thừa kỳ trước không vào Biên bản), H3 = 0 (dư cuối thực tế TQ)
             self.assertEqual(ws_dc["D3"].value, -2000000)
             self.assertEqual(ws_dc["H3"].value, 0)
-            # TNDN (row 4) có D4 = -5,000,000, H4 = -5,000,000
+            # TNDN (row 4) có D4 = -5,000,000, F4 là công thức động ='2024'!G76, H4 = -5,000,000
             self.assertEqual(ws_dc["D4"].value, -5000000)
+            self.assertEqual(ws_dc["F4"].value, "='2024'!G76")
             self.assertEqual(ws_dc["H4"].value, -5000000)
             # LPMB (row 6) có D6 = 0, H6 = 0
             self.assertEqual(ws_dc["D6"].value, 0)
