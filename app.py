@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 import threading
 import tkinter as tk
@@ -12,11 +13,12 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List
 
 from excel_exporter import export_to_excel
+from penalty_calculator import parse_cutoff_date
 from qhns_summarizer import integrate_tq_and_qhns_into_workbook
 from tax_parser import TaxDeclaration, parse_tax_xml
 
 
-APP_VERSION = "v1.3"
+APP_VERSION = "v1.4"
 
 
 class TaxXmlToExcelApp:
@@ -170,7 +172,14 @@ class TaxXmlToExcelApp:
         self.ent_year_to = ttk.Entry(row_opt3, textvariable=self.var_year_to, width=7, state=tk.DISABLED)
         self.ent_year_to.pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Label(row_opt3, text="(VD: để trống nếu muốn lấy tất cả 2019-2026, hoặc nhập 2020 - 2025)", font=("Segoe UI", 8, "italic"), foreground="#555555").pack(side=tk.LEFT)
+        ttk.Label(row_opt3, text="(VD: 2020 - 2025)", font=("Segoe UI", 8, "italic"), foreground="#555555").pack(side=tk.LEFT)
+
+        ttk.Separator(row_opt3, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        ttk.Label(row_opt3, text="Ngày tính chậm nộp (dd/mm/yyyy):").pack(side=tk.LEFT, padx=(0, 4))
+        self.var_cutoff_date = tk.StringVar(value=datetime.date.today().strftime("%d/%m/%Y"))
+        self.ent_cutoff_date = ttk.Entry(row_opt3, textvariable=self.var_cutoff_date, width=12)
+        self.ent_cutoff_date.pack(side=tk.LEFT, padx=(0, 6))
 
         # Bảng xem trước dữ liệu
         table_frame = ttk.Frame(self.root, padding=(12, 4, 12, 4))
@@ -439,6 +448,7 @@ class TaxXmlToExcelApp:
         layout_mode = self.var_layout.get()
         tq_path = self.var_tq_path.get().strip()
         y_from, y_to = self._get_year_bounds()
+        cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
@@ -455,6 +465,7 @@ class TaxXmlToExcelApp:
                     split_by_tax_type=split_files,
                     split_by_year=split_years,
                     layout=layout_mode,
+                    cutoff_date=cutoff_dt,
                 )
 
                 qhns_alerts: List[str] = []
@@ -467,6 +478,7 @@ class TaxXmlToExcelApp:
                         year_from=y_from,
                         year_to=y_to,
                         output_path=created[0],
+                        cutoff_date=cutoff_dt,
                     )
                     qhns_alerts = qhns_res.get("alerts", [])
                     qhns_done = True
@@ -522,6 +534,7 @@ class TaxXmlToExcelApp:
 
         y_from, y_to = self._get_year_bounds()
         open_after = self.var_open_after.get()
+        cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
@@ -537,6 +550,7 @@ class TaxXmlToExcelApp:
                     year_from=y_from,
                     year_to=y_to,
                     output_path=excel_path,
+                    cutoff_date=cutoff_dt,
                 )
 
                 def on_done() -> None:

@@ -200,7 +200,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
             out_master_tncn = os.path.join(tmpdir, "TongHop_TNCN_HaiThongTu.xlsx")
             export_to_excel([d2020, decls[1]], out_master_tncn, include_appendices=False, split_by_tax_type=False)
             wb_master_tncn = openpyxl.load_workbook(out_master_tncn)
-            self.assertEqual(wb_master_tncn.sheetnames, ["Tong_hop_File", "TNCN", "2020", "2024"])
+            self.assertEqual(wb_master_tncn.sheetnames, ["Tong_hop_File", "TNCN", "2020", "2024", "Tinh_TienChamNop"])
             ws_master = wb_master_tncn["TNCN"]
             self.assertEqual(ws_master["G1"].value, 2020)
             self.assertEqual(ws_master["G3"].value, 70)
@@ -780,6 +780,99 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_dc["H8"].value, 0)
             # Dòng TỔNG CỘNG cuối Bảng 1 (row 9)
             self.assertEqual(ws_dc["A9"].value, "TỔNG CỘNG TẤT CẢ SẮC THUẾ TRÊN TQ")
+            # Sheet Tinh_TienChamNop cũng được tự động sinh kèm theo
+            self.assertIn("Tinh_TienChamNop", wb_out.sheetnames)
+
+    def test_v14_late_payment_and_penalty_sheet(self) -> None:
+        """Kiểm thử v1.4: Biểu tính tiền chậm nộp & xử phạt VPHC theo từng thời kỳ (0,05% / 0,03%, thời hiệu 5/10 năm, lệch kỳ, quý/tháng)."""
+        import datetime
+        from penalty_calculator import (
+            add_late_payment_sheet,
+            compute_cit_start_date,
+            compute_license_fee_start_date,
+            compute_pit_start_date,
+            compute_vat_monthly_start_date,
+            compute_vat_quarterly_start_date,
+        )
+
+        # 1. Kiểm tra ngày bắt đầu tính chậm nộp theo quy định các thời kỳ
+        self.assertEqual(compute_vat_monthly_start_date(2023, 5), datetime.date(2023, 6, 21))
+        self.assertEqual(compute_vat_monthly_start_date(2023, 12), datetime.date(2024, 1, 21))
+        # GTGT Quý trước và sau 01/07/2020 (Luật 38/2019/QH14)
+        self.assertEqual(compute_vat_quarterly_start_date(2019, 2), datetime.date(2019, 7, 31))
+        self.assertEqual(compute_vat_quarterly_start_date(2020, 1), datetime.date(2020, 5, 1))
+        self.assertEqual(compute_vat_quarterly_start_date(2020, 2), datetime.date(2020, 8, 1))
+        self.assertEqual(compute_vat_quarterly_start_date(2024, 4), datetime.date(2025, 2, 1))
+        # TNDN năm dương lịch vs năm tài chính lệch kỳ (kết thúc 30/06)
+        self.assertEqual(compute_cit_start_date(2024), datetime.date(2025, 4, 1))
+        self.assertEqual(compute_cit_start_date(2024, datetime.date(2025, 6, 30)), datetime.date(2025, 10, 1))
+        # TNCN & LPMB
+        self.assertEqual(compute_pit_start_date(2024), datetime.date(2025, 4, 1))
+        self.assertEqual(compute_license_fee_start_date(2024), datetime.date(2024, 1, 31))
+
+        # 2. Tạo workbook giả lập gồm các năm 2016, 2023, 2024 (kèm sheet năm '2024' để kiểm tra tự động link E76/E90)
+        wb = openpyxl.Workbook()
+        ws_2024 = wb.active
+        ws_2024.title = "2024"
+        ws_2024["E76"] = 100000000
+        ws_2024["E90"] = 25000000
+
+        cutoff = datetime.date(2026, 9, 15)
+        ws = add_late_payment_sheet(
+            wb,
+            years=[2016, 2023, 2024],
+            cutoff_date=cutoff,
+            vat_frequency="month",
+            fiscal_ranges={2024: (datetime.date(2024, 7, 1), datetime.date(2025, 6, 30))},
+        )
+
+        # Kiểm tra Khối thông số điều khiển (D4..D7, H4..H7)
+        self.assertEqual(ws["D4"].value, cutoff)
+        self.assertEqual(ws["D5"].value, datetime.date(2016, 6, 30))
+        self.assertAlmostEqual(ws["D6"].value, 0.0003)
+        self.assertAlmostEqual(ws["D7"].value, 0.0005)
+        self.assertAlmostEqual(ws["H4"].value, 0.20)
+        self.assertAlmostEqual(ws["H5"].value, 1.5)
+        self.assertEqual(ws["H6"].value, 5)
+        self.assertEqual(ws["H7"].value, 10)
+
+        # Tìm dòng TNDN năm 2024 & TNCN năm 2024 để xác nhận tự động nối '2024'!E76, '2024'!E90 và NTC lệch kỳ 01/10/2025
+        found_cit_2024 = False
+        found_pit_2024 = False
+        found_chk_zero = False
+        in_2024 = False
+        for r in range(13, ws.max_row + 1):
+            b_val = str(ws.cell(r, 2).value or "")
+            if b_val == "Năm 2024":
+                in_2024 = True
+            elif b_val.startswith("Phạt VPHC về thủ tục"):
+                in_2024 = False
+            if in_2024 and b_val.startswith("Thuế TNDN"):
+                found_cit_2024 = True
+                self.assertEqual(ws.cell(r, 3).value, "=IF('2024'!E76>0,'2024'!E76,0)")
+                self.assertEqual(ws.cell(r, 9).value, datetime.date(2025, 10, 1))
+                self.assertEqual(ws.cell(r, 10).value, "=$D$4")
+                # Công thức phạt 20% có kiểm tra thời hiệu 5 năm ($H$6*12)
+                self.assertIn("EDATE(", str(ws.cell(r, 5).value))
+                # Công thức tách 2 giai đoạn 0,05% (cột K) và 0,03% (cột L)
+                self.assertIn("$D$5", str(ws.cell(r, 11).value))
+                self.assertIn("$D$5+1", str(ws.cell(r, 12).value))
+                self.assertIn("$D$7", str(ws.cell(r, 13).value))
+                self.assertIn("$D$6", str(ws.cell(r, 13).value))
+            if in_2024 and b_val == "Thuế TNCN":
+                found_pit_2024 = True
+                self.assertEqual(ws.cell(r, 3).value, "=IF('2024'!E90>0,'2024'!E90,0)")
+                self.assertEqual(ws.cell(r, 9).value, datetime.date(2025, 4, 1))
+            if "Kiểm tra khớp Tổng bảng tổng hợp" in str(ws.cell(r, 1).value or ""):
+                found_chk_zero = True
+                self.assertTrue(str(ws.cell(r, 8).value).startswith("=H"))
+
+        self.assertTrue(found_cit_2024)
+        self.assertTrue(found_pit_2024)
+        self.assertTrue(found_chk_zero)
+
+        # Kiểm tra số ngày chậm nộp 2023-06-21 đến 2026-09-15 đúng 1183 ngày như mẫu thực tế
+        self.assertEqual((datetime.date(2026, 9, 15) - datetime.date(2023, 6, 21)).days + 1, 1183)
 
 
 if __name__ == "__main__":

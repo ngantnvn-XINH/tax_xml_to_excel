@@ -3549,6 +3549,7 @@ def _populate_workbook_sheets(
     all_decls: List[TaxDeclaration],
     valid_decls: List[TaxDeclaration],
     include_appendices: bool = True,
+    cutoff_date: Optional[datetime.date] = None,
 ) -> None:
     """Điền đầy đủ các sheet dữ liệu chuẩn vào Workbook."""
     existing_sheets: Set[str] = set()
@@ -3598,6 +3599,12 @@ def _populate_workbook_sheets(
 
     if gtgt_items or tndn_items or tncn_items:
         write_yearly_verification_sheets(wb, existing_sheets)
+        from penalty_calculator import add_late_payment_sheet
+        add_late_payment_sheet(
+            wb,
+            cutoff_date=cutoff_date,
+            fiscal_ranges=fiscal_ranges or None,
+        )
 
     other_items = [d for d in valid_decls if d.tax_type == "Khác"]
     if other_items:
@@ -3614,6 +3621,7 @@ def export_to_excel(
     split_by_tax_type: bool = False,
     split_by_year: bool = False,
     layout: str = "vertical",
+    cutoff_date: Optional[datetime.date] = None,
 ) -> List[str]:
     """
     Xuất danh sách TaxDeclaration ra file Excel chuẩn 100% mẫu người dùng (Phiên bản v1.2):
@@ -3698,7 +3706,7 @@ def export_to_excel(
     # CHẾ ĐỘ 3: FILE GỘP TỔNG HỢP
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    _populate_workbook_sheets(wb, declarations, valid, include_appendices=include_appendices)
+    _populate_workbook_sheets(wb, declarations, valid, include_appendices=include_appendices, cutoff_date=cutoff_date)
     wb.save(output_path)
     created_files.append(output_path)
 
