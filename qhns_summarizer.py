@@ -129,6 +129,35 @@ def parse_tq_rows(ws_tq) -> List[Dict[str, Any]]:
     return rows
 
 
+TIEU_MUC_NAMES: Dict[str, str] = {
+    "1001": "Thuế TNCN từ tiền lương, tiền công",
+    "1003": "Thuế TNCN từ hoạt động SXKD cá nhân",
+    "1004": "Thuế TNCN từ đầu tư vốn",
+    "1005": "Thuế TNCN từ chuyển nhượng vốn",
+    "1006": "Thuế TNCN từ chuyển nhượng BĐS",
+    "1007": "Thuế TNCN từ trúng thưởng",
+    "1008": "Thuế TNCN từ bản quyền, nhượng quyền TM",
+    "1015": "Thuế TNCN từ chuyển nhượng chứng khoán",
+    "1052": "Thuế TNDN (SXKD trong nước)",
+    "1053": "Thuế TNDN từ hoạt động chuyển nhượng BĐS",
+    "1056": "Thuế TNDN của nhà thầu nước ngoài",
+    "1701": "Thuế GTGT hàng SXKD trong nước",
+    "1702": "Thuế GTGT hàng nhập khẩu",
+    "1704": "Thuế GTGT của nhà thầu nước ngoài",
+    "1705": "Thuế GTGT vãng lai ngoại tỉnh",
+    "2862": "Lệ phí môn bài bậc 1",
+    "2863": "Lệ phí môn bài bậc 2",
+    "2864": "Lệ phí môn bài bậc 3",
+    "4254": "Phạt vi phạm hành chính về thuế",
+    "4268": "Phạt khai sai / trốn thuế",
+    "4272": "Tiền chậm nộp phạt vi phạm hành chính",
+    "4917": "Tiền chậm nộp thuế TNCN",
+    "4918": "Tiền chậm nộp thuế TNDN",
+    "4931": "Tiền chậm nộp thuế GTGT",
+    "4944": "Tiền chậm nộp khoản thu khác (LPMB)",
+}
+
+
 def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year: int) -> Dict[str, Any]:
     """
     Tính toán toàn bộ chỉ số từ dữ liệu TQ theo đúng chuẩn nghiệp vụ thanh tra - kiểm tra thuế:
@@ -142,6 +171,12 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
     prev_yy = str(prev_year)[-2:]
 
     LPMB_TMS = ("2862", "2863", "2864", "1801", "1802", "1803", "1804")
+    CORE_TMS = ("1701", "1052", "1001") + LPMB_TMS
+
+    other_tms_set = sorted({
+        x["tm"] for x in tq_rows
+        if x["tm"] and x["tm"] not in CORE_TMS and x["gd"] != "BT"
+    })
 
     metrics: Dict[str, Any] = {
         "gtgt_tk_by_ky": {y: 0.0 for y in years},
@@ -154,6 +189,10 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         "lpmb_c2_by_ht": {y: 0.0 for y in years},
         "lpmb_ps_detail": defaultdict(lambda: defaultdict(float)),
         "lpmb_nop_detail": defaultdict(lambda: defaultdict(float)),
+        # Tất cả các tiểu mục khác có mặt trên Sổ Tổng Quan (TQ)
+        "other_tms": other_tms_set,
+        "other_ps_by_ky": {tm: {y: 0.0 for y in years} for tm in other_tms_set},
+        "other_nop_by_ht": {tm: {y: 0.0 for y in years} for tm in other_tms_set},
         # Đầu kỳ năm start_year
         "dk_gtgt_qt_truoc": 0.0,
         "dk_gtgt_qt_notes": [],
@@ -167,7 +206,10 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         "dk_tncn_qt_notes": [],
         "dk_lpmb_notes": [],
         # Số dư đầu kỳ chính xác tuyệt đối tại 01/01/start_year theo phương pháp phân hoạch Sổ TQ
-        "opening_exact": {"1701": 0.0, "1052": 0.0, "1001": 0.0, "LPMB": 0.0},
+        "opening_exact": {
+            "1701": 0.0, "1052": 0.0, "1001": 0.0, "LPMB": 0.0,
+            **{tm: 0.0 for tm in other_tms_set},
+        },
         # Phát hiện kỳ thiếu TK trên TQ (có C2 nhưng không có TK)
         "tncn_tk_periods": defaultdict(set),
         "tncn_c2_periods": defaultdict(set),
@@ -262,7 +304,14 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                 metrics["lpmb_ps_by_ky"][ky_y] += val
                 metrics["lpmb_ps_detail"][ky_y][tm] += val
                 in_bucket_a = True
+            elif tm in metrics["other_ps_by_ky"] and gd not in payment_gds:
+                metrics["other_ps_by_ky"][tm][ky_y] += ledger_signed_amount(item)
+                in_bucket_a = True
+        elif tm in metrics["other_ps_by_ky"] and gd not in payment_gds and ky_y is None and ht_y in years:
+            metrics["other_ps_by_ky"][tm][ht_y] += ledger_signed_amount(item)
+            in_bucket_a = True
 
+        if ky_y in years:
             if tm == "1701" and gd == "C2" and ky:
                 metrics["gtgt_c2_periods"][ky_y].add(ky)
             elif tm == "1001" and gd == "C2" and ky:
@@ -293,15 +342,26 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                 in_bucket_b = True
                 if gd in ("HC", "NT", "C5"):
                     metrics.setdefault("special_nop_notes", defaultdict(list))[("LPMB", ht_y)].append(f"{gd}({tm}): {p_amt:,.0f}")
+            elif tm in metrics["other_nop_by_ht"]:
+                metrics["other_nop_by_ht"][tm][ht_y] += p_amt
+                in_bucket_b = True
 
         # 4. Bucket C: Toàn bộ giao dịch kỳ trước chuyển sang (không thuộc Bucket A & B và không vượt quá end_year)
-        bucket_c_key = tm if tm in ("1701", "1052", "1001") else ("LPMB" if tm in LPMB_TMS else None)
+        if tm in ("1701", "1052", "1001"):
+            bucket_c_key = tm
+        elif tm in LPMB_TMS:
+            bucket_c_key = "LPMB"
+        elif tm in metrics["opening_exact"]:
+            bucket_c_key = tm
+        else:
+            bucket_c_key = None
+
         if bucket_c_key is not None and not in_bucket_a and not in_bucket_b:
             if gd in payment_gds:
                 if ht_y < start_year:
                     metrics["opening_exact"][bucket_c_key] += ledger_signed_amount(item)
             else:
-                if (ky_y is not None and ky_y < start_year) or (ky_y in years and ht_y <= end_year):
+                if (ky_y is not None and ky_y < start_year) or (ky_y is None and ht_y < start_year) or (ky_y in years and ht_y <= end_year):
                     metrics["opening_exact"][bucket_c_key] += ledger_signed_amount(item)
 
     return metrics
@@ -989,40 +1049,140 @@ def integrate_tq_and_qhns_into_workbook(
         cell.fill = header_fill
     ws_dc.row_dimensions[2].height = 34
 
-    dc_specs = [
-        ("Thuế GTGT", "1701", last_rows.get("gtgt"), gtgt_e_cells, "gtgt_tk_by_ky", "gtgt_c2_by_ht"),
-        ("Thuế TNDN", "1052", last_rows.get("tndn"), tndn_e_cells, "tndn_tk_qt_by_ky", "tndn_c2_by_ht"),
-        ("Thuế TNCN", "1001", last_rows.get("tncn"), tncn_e_cells, "tncn_tk_th_tq_by_ky", "tncn_c2_by_ht"),
-        ("Lệ phí môn bài", "LPMB", last_rows.get("lpmb"), [], "lpmb_ps_by_ky", "lpmb_c2_by_ht"),
-    ]
+    other_tms = metrics.get("other_tms", [])
 
-    dc_r = 3
-    for label, tm_key, r_last_q, e_cells, ps_key, nop_key in dc_specs:
+    # Xây dựng Bảng 2 trước trong bộ nhớ vị trí để Bảng 1 có thể link trực tiếp sang số dư năm cuối của các tiểu mục khác
+    b1_start_row = 3
+    b1_core_count = 4
+    b1_total_rows = b1_core_count + len(other_tms)
+    b1_sum_row = b1_start_row + b1_total_rows
+    b2_title_row = b1_sum_row + 2
+    b2_header_row = b2_title_row + 1
+    b2_data_start = b2_header_row + 1
+
+    # --- BẢNG 2: CHI TIẾT QHNS KHỚP THỰC TẾ THEO TỪNG NĂM (TẤT CẢ SẮC THUẾ / TIỂU MỤC CÓ TRÊN TQ) ---
+    ws_dc.cell(
+        b2_title_row,
+        1,
+        f"BẢNG 2: CHI TIẾT QUAN HỆ NGÂN SÁCH KHỚP THỰC TẾ TẤT CẢ CÁC SẮC THUẾ TRÊN SỔ TỔNG QUAN ({start_year}–{end_year})",
+    ).font = title_font
+    ws_dc.merge_cells(start_row=b2_title_row, start_column=1, end_row=b2_title_row, end_column=7)
+    ws_dc.row_dimensions[b2_title_row].height = 24
+
+    b2_headers = [
+        "STT",
+        "CHỈ TIÊU / TIỂU MỤC",
+        "Số kỳ trước chuyển sang\n(Thực tế TQ)",
+        "Phát sinh phải nộp\n(Theo Sổ TQ)",
+        "Điều chỉnh / Xử lý",
+        "Số đã nộp / Hoàn trả\n(Theo Sổ TQ)",
+        "Số còn phải nộp\n(Khớp thực tế TQ)",
+    ]
+    for c_idx, h_text in enumerate(b2_headers, start=1):
+        cell = ws_dc.cell(b2_header_row, c_idx, h_text)
+        cell.font = font_hdr
+        cell.alignment = align_center
+        cell.border = border_all
+        cell.fill = header_fill
+    ws_dc.row_dimensions[b2_header_row].height = 30
+
+    b2_rows_spec: List[Tuple[str, str, str, Dict[int, float], Dict[int, float]]] = [
+        ("1701", "1", "Thuế GTGT (1701)", metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"]),
+        ("1052", "2", "Thuế TNDN (1052)", metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"]),
+        ("1001", "3", "Thuế TNCN (1001)", metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"]),
+        ("LPMB", "4", "Lệ phí môn bài (2862/2863/2864)", metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"]),
+    ]
+    for idx_o, o_tm in enumerate(other_tms, start=5):
+        o_name = TIEU_MUC_NAMES.get(o_tm, f"Khoản thu khác")
+        b2_rows_spec.append((o_tm, str(idx_o), f"{o_name} ({o_tm})", metrics["other_ps_by_ky"][o_tm], metrics["other_nop_by_ht"][o_tm]))
+
+    dc_r = b2_data_start
+    dc_prev: Dict[str, int] = {}
+    dc_last_year_rows: Dict[str, int] = {}
+    for y_idx, y in enumerate(years):
+        ws_dc.cell(dc_r, 2, f"Năm {y}").font = font_year
+        for c in range(1, 8):
+            cell = ws_dc.cell(dc_r, c)
+            cell.border = border_all
+            cell.fill = year_fill
+        dc_r += 1
+
+        dc_this: Dict[str, int] = {}
+        for tm_key, stt, label, ps_map, nop_map in b2_rows_spec:
+            dc_this[tm_key] = dc_r
+            ws_dc.cell(dc_r, 1, stt).alignment = align_center
+            ws_dc.cell(dc_r, 2, label).alignment = align_left
+            if y_idx == 0:
+                ws_dc.cell(dc_r, 3, round(metrics["opening_exact"][tm_key]))
+            else:
+                ws_dc.cell(dc_r, 3, f"=G{dc_prev[tm_key]}")
+            ws_dc.cell(dc_r, 4, round(ps_map[y]))
+            ws_dc.cell(dc_r, 5, 0)
+            ws_dc.cell(dc_r, 6, round(nop_map[y]))
+            ws_dc.cell(dc_r, 7, f"=C{dc_r}+D{dc_r}+E{dc_r}-F{dc_r}")
+            for c in range(1, 8):
+                cell = ws_dc.cell(dc_r, c)
+                cell.font = font_bold if c in (2, 7) else font_regular
+                cell.border = border_all
+                if c >= 3:
+                    cell.alignment = align_right
+                    cell.number_format = num_fmt
+            dc_r += 1
+        dc_prev = dc_this
+        if y_idx == len(years) - 1:
+            dc_last_year_rows = dc_this
+
+    # --- ĐIỀN BẢNG 1: TỔNG HỢP ĐỐI CHIẾU CUỐI KỲ TẤT CẢ SẮC THUẾ (BIÊN BẢN QHNS <-> THỰC TẾ SỔ TQ) ---
+    dc_specs = [
+        ("Thuế GTGT", "1701", last_rows.get("gtgt"), gtgt_e_cells, metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], True),
+        ("Thuế TNDN", "1052", last_rows.get("tndn"), tndn_e_cells, metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], True),
+        ("Thuế TNCN", "1001", last_rows.get("tncn"), tncn_e_cells, metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], True),
+        ("Lệ phí môn bài", "LPMB", last_rows.get("lpmb"), [], metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], True),
+    ]
+    for o_tm in other_tms:
+        o_name = TIEU_MUC_NAMES.get(o_tm, f"Tiểu mục {o_tm}")
+        dc_specs.append((o_name, o_tm, None, [], metrics["other_ps_by_ky"][o_tm], metrics["other_nop_by_ht"][o_tm], False))
+
+    dc_r = b1_start_row
+    for label, tm_key, r_last_q, e_cells, ps_map, nop_map, is_on_qhns in dc_specs:
         tm_disp = "2862/2863/2864" if tm_key == "LPMB" else tm_key
         open_exact_val = round(metrics["opening_exact"][tm_key])
-        open_diff_val = open_exact_val - opening_bb[tm_key]
         tq_close_val = round(
             metrics["opening_exact"][tm_key]
-            + sum(metrics[ps_key].values())
-            - sum(metrics[nop_key].values())
+            + sum(ps_map.values())
+            - sum(nop_map.values())
         )
-        rdiff_val = rounding_diff[tm_key]
 
         ws_dc.cell(dc_r, 1, label).alignment = align_left
         ws_dc.cell(dc_r, 2, tm_disp).alignment = align_center
-        ws_dc.cell(dc_r, 3, f"='QHNS'!G{r_last_q}" if r_last_q else 0)
-        ws_dc.cell(dc_r, 4, open_diff_val)
-        if open_diff_val != 0:
+        if is_on_qhns:
+            open_diff_val = open_exact_val - opening_bb[tm_key]
+            rdiff_val = rounding_diff[tm_key]
+            ws_dc.cell(dc_r, 3, f"='QHNS'!G{r_last_q}" if r_last_q else 0)
+            ws_dc.cell(dc_r, 4, open_diff_val)
+            if open_diff_val != 0:
+                ws_dc.cell(dc_r, 4).comment = Comment(
+                    f"Đầu kỳ thực tế trên TQ ({open_exact_val:,.0f}) − Đầu kỳ ghi vào Biên bản QHNS ({opening_bb[tm_key]:,.0f}) = {open_diff_val:+,.0f}",
+                    "QHNS",
+                )
+            if e_cells:
+                e_sum_expr = "+".join([f"'QHNS'!{ref}" for ref in e_cells])
+                ws_dc.cell(dc_r, 5, f"={e_sum_expr}")
+            else:
+                ws_dc.cell(dc_r, 5, 0)
+            ws_dc.cell(dc_r, 6, rdiff_val)
+        else:
+            # Sắc thuế/tiểu mục khác (Phạt, Tiền chậm nộp, TNCN khác...): đối chiếu trực tiếp từ Bảng 2
+            ws_dc.cell(dc_r, 3, 0)
+            b2_last_r = dc_last_year_rows.get(tm_key)
+            ws_dc.cell(dc_r, 4, f"=G{b2_last_r}" if b2_last_r else tq_close_val)
             ws_dc.cell(dc_r, 4).comment = Comment(
-                f"Đầu kỳ thực tế trên TQ ({open_exact_val:,.0f}) − Đầu kỳ ghi vào Biên bản QHNS ({opening_bb[tm_key]:,.0f}) = {open_diff_val:+,.0f}",
+                "Tiểu mục ngoài biểu QHNS Biên bản — liên kết trực tiếp số dư cuối kỳ từ Bảng 2 (Sổ TQ)",
                 "QHNS",
             )
-        if e_cells:
-            e_sum_expr = "+".join([f"'QHNS'!{ref}" for ref in e_cells])
-            ws_dc.cell(dc_r, 5, f"={e_sum_expr}")
-        else:
             ws_dc.cell(dc_r, 5, 0)
-        ws_dc.cell(dc_r, 6, rdiff_val)
+            ws_dc.cell(dc_r, 6, 0)
+
         ws_dc.cell(dc_r, 7, f"=C{dc_r}+D{dc_r}-E{dc_r}-F{dc_r}")
         ws_dc.cell(dc_r, 8, tq_close_val)
         ws_dc.cell(dc_r, 9, f"=G{dc_r}-H{dc_r}")
@@ -1037,74 +1197,22 @@ def integrate_tq_and_qhns_into_workbook(
         ws_dc.cell(dc_r, 9).fill = ok_fill
         dc_r += 1
 
-    # --- BẢNG 2: CHI TIẾT QHNS KHỚP THỰC TẾ THEO TỪNG NĂM (CÓ ĐẦY ĐỦ SỐ NỘP THỪA KỲ TRƯỚC CHUYỂN SANG) ---
-    dc_r += 1
-    ws_dc.cell(
-        dc_r,
-        1,
-        f"BẢNG 2: CHI TIẾT QUAN HỆ NGÂN SÁCH KHỚP THỰC TẾ THEO SỔ TỔNG QUAN ({start_year}–{end_year}, BAO GỒM SỐ NỘP THỪA KỲ TRƯỚC CHUYỂN SANG)",
-    ).font = title_font
-    ws_dc.merge_cells(start_row=dc_r, start_column=1, end_row=dc_r, end_column=7)
-    ws_dc.row_dimensions[dc_r].height = 24
-    dc_r += 1
-
-    b2_headers = [
-        "STT",
-        "CHỈ TIÊU",
-        "Số kỳ trước chuyển sang\n(Thực tế TQ)",
-        "Phát sinh phải nộp\n(Theo Sổ TQ)",
-        "Điều chỉnh / Xử lý",
-        "Số đã nộp / Hoàn trả\n(Theo Sổ TQ)",
-        "Số còn phải nộp\n(Khớp thực tế TQ)",
-    ]
-    for c_idx, h_text in enumerate(b2_headers, start=1):
-        cell = ws_dc.cell(dc_r, c_idx, h_text)
+    # Dòng TỔNG CỘNG cuối Bảng 1 (khớp tổng dòng cuối cùng toàn Sổ TQ)
+    ws_dc.cell(b1_sum_row, 1, "TỔNG CỘNG TẤT CẢ SẮC THUẾ TRÊN TQ").alignment = align_left
+    ws_dc.cell(b1_sum_row, 2, "Tất cả TM").alignment = align_center
+    for c_col, col_let in ((3, "C"), (4, "D"), (5, "E"), (6, "F"), (7, "G"), (8, "H"), (9, "I")):
+        ws_dc.cell(b1_sum_row, c_col, f"=SUM({col_let}{b1_start_row}:{col_let}{b1_sum_row - 1})")
+    for c in range(1, 10):
+        cell = ws_dc.cell(b1_sum_row, c)
         cell.font = font_hdr
-        cell.alignment = align_center
         cell.border = border_all
-        cell.fill = header_fill
-    ws_dc.row_dimensions[dc_r].height = 30
-    dc_r += 1
+        cell.fill = year_fill
+        if c >= 3:
+            cell.alignment = align_right
+            cell.number_format = num_fmt
+    ws_dc.cell(b1_sum_row, 9).fill = ok_fill
 
-    dc_prev: Dict[str, int] = {}
-    b2_rows_spec = [
-        ("1701", "1", "Thuế GTGT (1701)", "gtgt_tk_by_ky", "gtgt_c2_by_ht"),
-        ("1052", "2", "Thuế TNDN (1052)", "tndn_tk_qt_by_ky", "tndn_c2_by_ht"),
-        ("1001", "3", "Thuế TNCN (1001)", "tncn_tk_th_tq_by_ky", "tncn_c2_by_ht"),
-        ("LPMB", "4", "Lệ phí môn bài (2862/2863/2864)", "lpmb_ps_by_ky", "lpmb_c2_by_ht"),
-    ]
-    for y_idx, y in enumerate(years):
-        ws_dc.cell(dc_r, 2, f"Năm {y}").font = font_year
-        for c in range(1, 8):
-            cell = ws_dc.cell(dc_r, c)
-            cell.border = border_all
-            cell.fill = year_fill
-        dc_r += 1
-
-        dc_this: Dict[str, int] = {}
-        for tm_key, stt, label, ps_key, nop_key in b2_rows_spec:
-            dc_this[tm_key] = dc_r
-            ws_dc.cell(dc_r, 1, stt).alignment = align_center
-            ws_dc.cell(dc_r, 2, label).alignment = align_left
-            if y_idx == 0:
-                ws_dc.cell(dc_r, 3, round(metrics["opening_exact"][tm_key]))
-            else:
-                ws_dc.cell(dc_r, 3, f"=G{dc_prev[tm_key]}")
-            ws_dc.cell(dc_r, 4, round(metrics[ps_key][y]))
-            ws_dc.cell(dc_r, 5, 0)
-            ws_dc.cell(dc_r, 6, round(metrics[nop_key][y]))
-            ws_dc.cell(dc_r, 7, f"=C{dc_r}+D{dc_r}+E{dc_r}-F{dc_r}")
-            for c in range(1, 8):
-                cell = ws_dc.cell(dc_r, c)
-                cell.font = font_bold if c in (2, 7) else font_regular
-                cell.border = border_all
-                if c >= 3:
-                    cell.alignment = align_right
-                    cell.number_format = num_fmt
-            dc_r += 1
-        dc_prev = dc_this
-
-    dc_widths = {1: 20, 2: 32, 3: 20, 4: 22, 5: 20, 6: 20, 7: 20, 8: 20, 9: 20}
+    dc_widths = {1: 36, 2: 34, 3: 20, 4: 22, 5: 20, 6: 20, 7: 20, 8: 20, 9: 20}
     for c_idx, w in dc_widths.items():
         ws_dc.column_dimensions[get_column_letter(c_idx)].width = w
 

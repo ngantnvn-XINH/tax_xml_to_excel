@@ -737,6 +737,11 @@ class TestTaxXmlToExcel(unittest.TestCase):
             ws_tq.append(["7901", "2401", "6", "C2", "1001", "VND", -5000000, datetime.datetime(2024, 2, 20)])
             ws_tq.append(["7901", "24CN", "7", "TK", "2862", "VND", 3000000, datetime.datetime(2024, 1, 15)])
             ws_tq.append(["7901", "24CN", "8", "C2", "2862", "VND", -3000000, datetime.datetime(2024, 1, 20)])
+            # Các sắc thuế/khoản thu khác trên TQ: Phạt VPHC (4254) nộp thừa -1,000,000 & Tiền chậm nộp TNCN (4917) khớp 0
+            ws_tq.append(["7901", "2405", "9", "QP", "4254", "VND", 2000000, datetime.datetime(2024, 5, 10)])
+            ws_tq.append(["7901", "2405", "10", "C2", "4254", "VND", -3000000, datetime.datetime(2024, 5, 15)])
+            ws_tq.append(["7901", "2406", "11", "NC", "4917", "VND", 500000, datetime.datetime(2024, 6, 10)])
+            ws_tq.append(["7901", "2406", "12", "C2", "4917", "VND", -500000, datetime.datetime(2024, 6, 15)])
             tq_path = os.path.join(tmpdir, "tq.xlsx")
             wb_tq.save(tq_path)
 
@@ -768,6 +773,13 @@ class TestTaxXmlToExcel(unittest.TestCase):
             # LPMB (row 6) có D6 = 0, H6 = 0
             self.assertEqual(ws_dc["D6"].value, 0)
             self.assertEqual(ws_dc["H6"].value, 0)
+            # Các sắc thuế khác trên TQ tự động xuất hiện trên Bảng 1 DoiChieu_QHNS: 4254 (row 7) và 4917 (row 8)
+            self.assertEqual(ws_dc["B7"].value, "4254")
+            self.assertEqual(ws_dc["H7"].value, -1000000)
+            self.assertEqual(ws_dc["B8"].value, "4917")
+            self.assertEqual(ws_dc["H8"].value, 0)
+            # Dòng TỔNG CỘNG cuối Bảng 1 (row 9)
+            self.assertEqual(ws_dc["A9"].value, "TỔNG CỘNG TẤT CẢ SẮC THUẾ TRÊN TQ")
 
 
 if __name__ == "__main__":
