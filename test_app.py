@@ -709,6 +709,66 @@ class TestTaxXmlToExcel(unittest.TestCase):
         lpmb_close = round(m["opening_exact"]["LPMB"] + sum(m["lpmb_ps_by_ky"].values()) - sum(m["lpmb_c2_by_ht"].values()))
         self.assertEqual(lpmb_close, 2000000)
 
+    def test_qhns_bien_ban_vs_doi_chieu_sheet(self) -> None:
+        """Kiểm thử tách riêng sheet QHNS (vào Biên bản, không nhận nộp thừa kỳ trước) và sheet DoiChieu_QHNS (khớp thực tế 100% TQ)."""
+        from qhns_summarizer import integrate_tq_and_qhns_into_workbook
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wb_decl = openpyxl.Workbook()
+            ws2024 = wb_decl.active
+            ws2024.title = "2024"
+            ws2024["C23"] = 10000000
+            ws2024["C76"] = 0
+            ws2024["C90"] = 5000000
+            decl_path = os.path.join(tmpdir, "decl.xlsx")
+            wb_decl.save(decl_path)
+
+            wb_tq = openpyxl.Workbook()
+            ws_tq = wb_tq.active
+            ws_tq.title = "TQ"
+            ws_tq.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            # Nộp thừa GTGT kỳ trước (-2,000,000) và nộp thừa TNDN kỳ trước (-5,000,000)
+            ws_tq.append(["7901", "2312", "1", "C2", "1701", "VND", -2000000, datetime.datetime(2023, 12, 20)])
+            ws_tq.append(["7901", "23CN", "2", "C2", "1052", "VND", -5000000, datetime.datetime(2023, 12, 25)])
+            # Phát sinh & nộp năm 2024
+            ws_tq.append(["7901", "2401", "3", "TK", "1701", "VND", 10000000, datetime.datetime(2024, 2, 15)])
+            ws_tq.append(["7901", "2401", "4", "C2", "1701", "VND", -8000000, datetime.datetime(2024, 2, 20)])
+            ws_tq.append(["7901", "2401", "5", "TK", "1001", "VND", 5000000, datetime.datetime(2024, 2, 15)])
+            ws_tq.append(["7901", "2401", "6", "C2", "1001", "VND", -5000000, datetime.datetime(2024, 2, 20)])
+            ws_tq.append(["7901", "24CN", "7", "TK", "2862", "VND", 3000000, datetime.datetime(2024, 1, 15)])
+            ws_tq.append(["7901", "24CN", "8", "C2", "2862", "VND", -3000000, datetime.datetime(2024, 1, 20)])
+            tq_path = os.path.join(tmpdir, "tq.xlsx")
+            wb_tq.save(tq_path)
+
+            out_path = os.path.join(tmpdir, "out.xlsx")
+            integrate_tq_and_qhns_into_workbook(decl_path, tq_path, year_from=2024, year_to=2024, output_path=out_path)
+
+            wb_out = openpyxl.load_workbook(out_path, data_only=False)
+            self.assertIn("QHNS", wb_out.sheetnames)
+            self.assertIn("DoiChieu_QHNS", wb_out.sheetnames)
+
+            ws_q = wb_out["QHNS"]
+            # Trên QHNS (Biên bản): đầu kỳ GTGT (H5+I5) = 0 (không ghi nhận nộp thừa -2,000,000)
+            self.assertEqual(ws_q["H5"].value, 0)
+            self.assertEqual(ws_q["I5"].value, 0)
+            # Trên QHNS (Biên bản): đầu kỳ TNDN không ghi nhận nộp thừa -5,000,000
+            self.assertIsNone(ws_q["C7"].value)
+            # Dòng 5: Lệ phí môn bài có mặt trên QHNS
+            self.assertEqual(ws_q["B12"].value, "Lệ phí môn bài")
+            self.assertEqual(ws_q["D12"].value, 3000000)
+            self.assertEqual(ws_q["F12"].value, 3000000)
+
+            ws_dc = wb_out["DoiChieu_QHNS"]
+            # Bảng 1 Đối chiếu: GTGT (row 3) có D3 = -2,000,000 (nộp thừa kỳ trước không vào Biên bản), H3 = 0 (dư cuối thực tế TQ)
+            self.assertEqual(ws_dc["D3"].value, -2000000)
+            self.assertEqual(ws_dc["H3"].value, 0)
+            # TNDN (row 4) có D4 = -5,000,000, H4 = -5,000,000
+            self.assertEqual(ws_dc["D4"].value, -5000000)
+            self.assertEqual(ws_dc["H4"].value, -5000000)
+            # LPMB (row 6) có D6 = 0, H6 = 0
+            self.assertEqual(ws_dc["D6"].value, 0)
+            self.assertEqual(ws_dc["H6"].value, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

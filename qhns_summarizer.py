@@ -637,6 +637,9 @@ def integrate_tq_and_qhns_into_workbook(
     gtgt_e_cells: List[str] = []
     tndn_e_cells: List[str] = []
     special_nop_notes = metrics.get("special_nop_notes", {})
+    opening_bb: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0}
+    rounding_diff: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0}
+    last_rows: Dict[str, int] = {}
     cur_r = 4
 
     for y_idx, y in enumerate(years):
@@ -679,13 +682,13 @@ def integrate_tq_and_qhns_into_workbook(
                 ws_q.row_dimensions[cur_r].height = 30
             cur_r += 1
 
-        # Điền công thức & số liệu cho từng dòng
+        # Điền công thức & số liệu cho từng dòng (Sheet QHNS chuẩn Biên bản: KHÔNG ghi nhận số nộp thừa lũy kế kỳ trước chuyển sang)
         # 1) Thuế GTGT
         r_g = this_rows["gtgt"]
         if y_idx == 0:
-            h_val = round(metrics["dk_gtgt_qt_truoc"])
-            open_gtgt = round(metrics["opening_exact"]["1701"])
-            i_val = open_gtgt - h_val
+            h_val = max(0, round(metrics["dk_gtgt_qt_truoc"]))
+            i_val = max(0, round(metrics["dk_gtgt_c2_prev"]))
+            opening_bb["1701"] = h_val + i_val
             ws_q.cell(r_g, 8, h_val).number_format = num_fmt
             ws_q.cell(r_g, 9, i_val).number_format = num_fmt
             ws_q.cell(r_g, 8).font = font_regular
@@ -694,16 +697,8 @@ def integrate_tq_and_qhns_into_workbook(
                 qt_note = ", ".join(metrics["dk_gtgt_qt_notes"]) or f"QT kỳ trước nộp trong kỳ kiểm tra"
                 ws_q.cell(r_g, 8).comment = Comment(f"Số nộp của {qt_note}", "QHNS")
             if i_val != 0:
-                c2_prev = round(metrics["dk_gtgt_c2_prev"])
                 c2_note = ", ".join(metrics["dk_gtgt_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
-                extra = i_val - c2_prev
-                if extra != 0:
-                    ws_q.cell(r_g, 9).comment = Comment(
-                        f"Số dư đầu kỳ trước chuyển sang ({i_val:,.0f}): gồm nộp tháng {c2_note} ({c2_prev:,.0f}) và dư lũy kế kỳ trước ({extra:+,.0f})",
-                        "QHNS",
-                    )
-                else:
-                    ws_q.cell(r_g, 9).comment = Comment(f"Số nộp tháng {c2_note}", "QHNS")
+                ws_q.cell(r_g, 9).comment = Comment(f"Số nộp tháng {c2_note} (không gồm số nộp thừa kỳ trước; xem đối chiếu tại sheet DoiChieu_QHNS)", "QHNS")
             ws_q.cell(r_g, 3, f"=H{r_g}+I{r_g}")
         else:
             ws_q.cell(r_g, 3, f"=G{prev_rows['gtgt']}")
@@ -746,10 +741,10 @@ def integrate_tq_and_qhns_into_workbook(
         # 3) Thuế TNDN
         r_td = this_rows["tndn"]
         if y_idx == 0:
-            h_td = round(metrics["dk_tndn_h"])
-            open_td = round(metrics["opening_exact"]["1052"])
-            i_td = open_td - h_td
-            if open_td != 0 or h_td != 0:
+            h_td = max(0, round(metrics["dk_tndn_h"]))
+            i_td = max(0, round(metrics["dk_tndn_i"]))
+            opening_bb["1052"] = h_td + i_td
+            if opening_bb["1052"] > 0:
                 ws_q.cell(r_td, 8, h_td).number_format = num_fmt
                 ws_q.cell(r_td, 9, i_td).number_format = num_fmt
                 ws_q.cell(r_td, 8).font = font_regular
@@ -757,10 +752,7 @@ def integrate_tq_and_qhns_into_workbook(
                 if h_td != 0:
                     ws_q.cell(r_td, 8).comment = Comment("QĐ truy thu TNDN kỳ trước nộp trong kỳ kiểm tra", "QHNS")
                 if i_td != 0:
-                    ws_q.cell(r_td, 9).comment = Comment(
-                        f"Số dư đầu kỳ TNDN (1052) kỳ trước chuyển sang theo Sổ Tổng Quan ({i_td:,.0f})",
-                        "QHNS",
-                    )
+                    ws_q.cell(r_td, 9).comment = Comment("Số nộp TNDN kỳ trước chuyển sang (không gồm nộp thừa kỳ trước)", "QHNS")
                 ws_q.cell(r_td, 3, f"=H{r_td}+I{r_td}")
         else:
             ws_q.cell(r_td, 3, f"=G{prev_rows['tndn']}")
@@ -798,9 +790,12 @@ def integrate_tq_and_qhns_into_workbook(
         # 4) Thuế TNCN
         r_tn = this_rows["tncn"]
         if y_idx == 0:
-            h_tn = round(metrics["dk_tncn_c2_prev"])
-            open_tn = round(metrics["opening_exact"]["1001"])
-            i_tn = open_tn - h_tn
+            h_tn = max(0, round(metrics["dk_tncn_c2_prev"]))
+            i_tn = round(metrics["dk_tncn_qt_prev"])
+            if h_tn + i_tn < 0:
+                # Không ghi nhận số nộp thừa thuần kỳ trước trên Biên bản
+                h_tn, i_tn = 0, 0
+            opening_bb["1001"] = h_tn + i_tn
             ws_q.cell(r_tn, 8, h_tn).number_format = num_fmt
             ws_q.cell(r_tn, 9, i_tn).number_format = num_fmt
             ws_q.cell(r_tn, 8).font = font_regular
@@ -809,15 +804,10 @@ def integrate_tq_and_qhns_into_workbook(
                 c2_tn_note = ", ".join(metrics["dk_tncn_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
                 ws_q.cell(r_tn, 8).comment = Comment(f"Kỳ kk {c2_tn_note} - Số nộp", "QHNS")
             if i_tn != 0:
-                qt_prev = round(metrics["dk_tncn_qt_prev"])
-                extra_tn = i_tn - qt_prev
-                if extra_tn != 0:
-                    ws_q.cell(r_tn, 9).comment = Comment(
-                        f"Số dư kỳ trước chuyển sang ({i_tn:,.0f}): gồm QT {start_year - 1} ({qt_prev:,.0f}) và dư lũy kế kỳ trước ({extra_tn:+,.0f})",
-                        "QHNS",
-                    )
-                else:
-                    ws_q.cell(r_tn, 9).comment = Comment(f"Số nộp thừa trên QT {start_year - 1} (TQ + TH)", "QHNS")
+                ws_q.cell(r_tn, 9).comment = Comment(
+                    f"Số QT {start_year - 1} (TQ + TH) (không gồm số nộp thừa lũy kế kỳ trước; xem đối chiếu tại sheet DoiChieu_QHNS)",
+                    "QHNS",
+                )
             ws_q.cell(r_tn, 3, f"=H{r_tn}+I{r_tn}")
         else:
             ws_q.cell(r_tn, 3, f"=G{prev_rows['tncn']}")
@@ -864,8 +854,9 @@ def integrate_tq_and_qhns_into_workbook(
         # 6) Lệ phí môn bài (TM 2862, 2863, 2864 và 1801..1804)
         r_mb = this_rows["lpmb"]
         if y_idx == 0:
-            open_mb = round(metrics["opening_exact"]["LPMB"])
-            if open_mb != 0:
+            open_mb = max(0, round(metrics["opening_exact"]["LPMB"]))
+            opening_bb["LPMB"] = open_mb
+            if open_mb > 0:
                 ws_q.cell(r_mb, 8, 0).number_format = num_fmt
                 ws_q.cell(r_mb, 9, open_mb).number_format = num_fmt
                 ws_q.cell(r_mb, 8).font = font_regular
@@ -873,7 +864,7 @@ def integrate_tq_and_qhns_into_workbook(
                 dk_mb_notes = metrics.get("dk_lpmb_notes", [])
                 note_detail = "; ".join(dk_mb_notes[:6]) + ("..." if len(dk_mb_notes) > 6 else "")
                 ws_q.cell(r_mb, 9).comment = Comment(
-                    f"Số dư đầu kỳ LPMB kỳ trước chuyển sang ({open_mb:,.0f})" + (f": {note_detail}" if note_detail else ""),
+                    f"Số phải nộp LPMB kỳ trước chuyển sang ({open_mb:,.0f})" + (f": {note_detail}" if note_detail else ""),
                     "QHNS",
                 )
                 ws_q.cell(r_mb, 3, f"=H{r_mb}+I{r_mb}")
@@ -902,14 +893,28 @@ def integrate_tq_and_qhns_into_workbook(
             ws_q.cell(r_mb, 6).comment = Comment(cmt, "QHNS")
         ws_q.cell(r_mb, 7, f"=C{r_mb}+D{r_mb}+E{r_mb}-F{r_mb}")
 
+        # Cộng dồn chênh lệch nhỏ (làm tròn tờ khai vs TQ) cho các năm không tách sang Cột E
+        if has_sheet:
+            if not gtgt_missing_info.get(y):
+                rounding_diff["1701"] += round(decl_vals[y]["gtgt_c23"]) - round(metrics["gtgt_tk_by_ky"][y])
+            if not tndn_missing_info.get(y):
+                rounding_diff["1052"] += round(decl_vals[y]["tndn_c76"]) - round(metrics["tndn_tk_qt_by_ky"][y])
+            if not tncn_missing_info.get(y):
+                c90_eff = round(decl_vals[y]["tncn_c90"])
+                f90_eff = round(metrics["tncn_tk_th_tq_by_ky"][y])
+                if c90_eff == 0 and f90_eff > 0:
+                    c90_eff = f90_eff
+                rounding_diff["1001"] += c90_eff - f90_eff
+
         # Nếu là năm cuối cùng và có khoản xử lý qua thanh tra (Cột E), đặt công thức đối chiếu ngược tại cột H
         if y_idx == len(years) - 1:
+            last_rows = this_rows
             if tncn_e_cells:
                 expr = "-".join(tncn_e_cells)
                 ws_q.cell(r_tn, 8, f"=G{r_tn}-{expr}").number_format = num_fmt
                 ws_q.cell(r_tn, 8).font = font_bold
                 ws_q.cell(r_tn, 8).comment = Comment(
-                    "Đối chiếu số dư cuối kỳ trên Sổ Tổng Quan (chưa cộng số xử lý qua thanh tra Cột 5)",
+                    "Đối chiếu số dư cuối kỳ (chưa cộng số xử lý qua thanh tra Cột 5; xem đối chiếu khớp thực tế 100% tại sheet DoiChieu_QHNS)",
                     "QHNS",
                 )
             if gtgt_e_cells:
@@ -917,7 +922,7 @@ def integrate_tq_and_qhns_into_workbook(
                 ws_q.cell(r_g, 8, f"=G{r_g}-{expr}").number_format = num_fmt
                 ws_q.cell(r_g, 8).font = font_bold
                 ws_q.cell(r_g, 8).comment = Comment(
-                    "Đối chiếu số dư cuối kỳ trên Sổ Tổng Quan (chưa cộng số xử lý qua thanh tra Cột 5)",
+                    "Đối chiếu số dư cuối kỳ (chưa cộng số xử lý qua thanh tra Cột 5; xem đối chiếu khớp thực tế 100% tại sheet DoiChieu_QHNS)",
                     "QHNS",
                 )
             if tndn_e_cells:
@@ -925,7 +930,7 @@ def integrate_tq_and_qhns_into_workbook(
                 ws_q.cell(r_td, 8, f"=G{r_td}-{expr}").number_format = num_fmt
                 ws_q.cell(r_td, 8).font = font_bold
                 ws_q.cell(r_td, 8).comment = Comment(
-                    "Đối chiếu số dư cuối kỳ trên Sổ Tổng Quan (chưa cộng số xử lý qua thanh tra Cột 5)",
+                    "Đối chiếu số dư cuối kỳ (chưa cộng số xử lý qua thanh tra Cột 5; xem đối chiếu khớp thực tế 100% tại sheet DoiChieu_QHNS)",
                     "QHNS",
                 )
 
@@ -949,6 +954,159 @@ def integrate_tq_and_qhns_into_workbook(
     col_widths = {1: 6, 2: 28, 3: 18, 4: 18, 5: 18, 6: 18, 7: 20, 8: 16, 9: 16}
     for c_idx, w in col_widths.items():
         ws_q.column_dimensions[get_column_letter(c_idx)].width = w
+
+    # 6. Sinh sheet DoiChieu_QHNS (ĐỐI CHIẾU SỐ KHỚP THỰC TẾ VỚI SỔ TỔNG QUAN TQ — tách riêng với sheet QHNS vào Biên bản)
+    if "DoiChieu_QHNS" in wb.sheetnames:
+        del wb["DoiChieu_QHNS"]
+    ws_dc = wb.create_sheet("DoiChieu_QHNS")
+
+    ok_fill = PatternFill("solid", fgColor="E2EFDA")
+    warn_fill = PatternFill("solid", fgColor="FCE4D6")
+    title_font = Font(name="Times New Roman", size=12, bold=True, color="1F4E78")
+
+    # --- BẢNG 1: TỔNG HỢP ĐỐI CHIẾU CUỐI KỲ (BIÊN BẢN QHNS <-> THỰC TẾ SỔ TQ) ---
+    ws_dc["A1"] = f"BẢNG 1: ĐỐI CHIẾU SỐ DƯ CUỐI KỲ NĂM {end_year} GIỮA BIÊN BẢN (QHNS) VÀ SỔ TỔNG QUAN (TQ)"
+    ws_dc["A1"].font = title_font
+    ws_dc.merge_cells("A1:I1")
+    ws_dc.row_dimensions[1].height = 24
+
+    dc_headers = [
+        "Sắc thuế",
+        "Tiểu mục",
+        "Dư cuối trên QHNS\n(Số vào Biên bản)",
+        "Số nộp thừa / ĐC đầu kỳ\n(Không ghi vào Biên bản)",
+        "Số xử lý qua thanh tra\n(Cột 5 QHNS)",
+        "Chênh lệch làm tròn\nTờ khai vs TQ",
+        "Dư cuối quy đổi\nkhớp thực tế",
+        "Dư cuối thực tế\ntrên Sổ TQ",
+        "Chênh lệch\n(0 = KHỚP 100%)",
+    ]
+    for c_idx, h_text in enumerate(dc_headers, start=1):
+        cell = ws_dc.cell(2, c_idx, h_text)
+        cell.font = font_hdr
+        cell.alignment = align_center
+        cell.border = border_all
+        cell.fill = header_fill
+    ws_dc.row_dimensions[2].height = 34
+
+    dc_specs = [
+        ("Thuế GTGT", "1701", last_rows.get("gtgt"), gtgt_e_cells, "gtgt_tk_by_ky", "gtgt_c2_by_ht"),
+        ("Thuế TNDN", "1052", last_rows.get("tndn"), tndn_e_cells, "tndn_tk_qt_by_ky", "tndn_c2_by_ht"),
+        ("Thuế TNCN", "1001", last_rows.get("tncn"), tncn_e_cells, "tncn_tk_th_tq_by_ky", "tncn_c2_by_ht"),
+        ("Lệ phí môn bài", "LPMB", last_rows.get("lpmb"), [], "lpmb_ps_by_ky", "lpmb_c2_by_ht"),
+    ]
+
+    dc_r = 3
+    for label, tm_key, r_last_q, e_cells, ps_key, nop_key in dc_specs:
+        tm_disp = "2862/2863/2864" if tm_key == "LPMB" else tm_key
+        open_exact_val = round(metrics["opening_exact"][tm_key])
+        open_diff_val = open_exact_val - opening_bb[tm_key]
+        tq_close_val = round(
+            metrics["opening_exact"][tm_key]
+            + sum(metrics[ps_key].values())
+            - sum(metrics[nop_key].values())
+        )
+        rdiff_val = rounding_diff[tm_key]
+
+        ws_dc.cell(dc_r, 1, label).alignment = align_left
+        ws_dc.cell(dc_r, 2, tm_disp).alignment = align_center
+        ws_dc.cell(dc_r, 3, f"='QHNS'!G{r_last_q}" if r_last_q else 0)
+        ws_dc.cell(dc_r, 4, open_diff_val)
+        if open_diff_val != 0:
+            ws_dc.cell(dc_r, 4).comment = Comment(
+                f"Đầu kỳ thực tế trên TQ ({open_exact_val:,.0f}) − Đầu kỳ ghi vào Biên bản QHNS ({opening_bb[tm_key]:,.0f}) = {open_diff_val:+,.0f}",
+                "QHNS",
+            )
+        if e_cells:
+            e_sum_expr = "+".join([f"'QHNS'!{ref}" for ref in e_cells])
+            ws_dc.cell(dc_r, 5, f"={e_sum_expr}")
+        else:
+            ws_dc.cell(dc_r, 5, 0)
+        ws_dc.cell(dc_r, 6, rdiff_val)
+        ws_dc.cell(dc_r, 7, f"=C{dc_r}+D{dc_r}-E{dc_r}-F{dc_r}")
+        ws_dc.cell(dc_r, 8, tq_close_val)
+        ws_dc.cell(dc_r, 9, f"=G{dc_r}-H{dc_r}")
+
+        for c in range(1, 10):
+            cell = ws_dc.cell(dc_r, c)
+            cell.font = font_bold if c in (1, 7, 8, 9) else font_regular
+            cell.border = border_all
+            if c >= 3:
+                cell.alignment = align_right
+                cell.number_format = num_fmt
+        ws_dc.cell(dc_r, 9).fill = ok_fill
+        dc_r += 1
+
+    # --- BẢNG 2: CHI TIẾT QHNS KHỚP THỰC TẾ THEO TỪNG NĂM (CÓ ĐẦY ĐỦ SỐ NỘP THỪA KỲ TRƯỚC CHUYỂN SANG) ---
+    dc_r += 1
+    ws_dc.cell(
+        dc_r,
+        1,
+        f"BẢNG 2: CHI TIẾT QUAN HỆ NGÂN SÁCH KHỚP THỰC TẾ THEO SỔ TỔNG QUAN ({start_year}–{end_year}, BAO GỒM SỐ NỘP THỪA KỲ TRƯỚC CHUYỂN SANG)",
+    ).font = title_font
+    ws_dc.merge_cells(start_row=dc_r, start_column=1, end_row=dc_r, end_column=7)
+    ws_dc.row_dimensions[dc_r].height = 24
+    dc_r += 1
+
+    b2_headers = [
+        "STT",
+        "CHỈ TIÊU",
+        "Số kỳ trước chuyển sang\n(Thực tế TQ)",
+        "Phát sinh phải nộp\n(Theo Sổ TQ)",
+        "Điều chỉnh / Xử lý",
+        "Số đã nộp / Hoàn trả\n(Theo Sổ TQ)",
+        "Số còn phải nộp\n(Khớp thực tế TQ)",
+    ]
+    for c_idx, h_text in enumerate(b2_headers, start=1):
+        cell = ws_dc.cell(dc_r, c_idx, h_text)
+        cell.font = font_hdr
+        cell.alignment = align_center
+        cell.border = border_all
+        cell.fill = header_fill
+    ws_dc.row_dimensions[dc_r].height = 30
+    dc_r += 1
+
+    dc_prev: Dict[str, int] = {}
+    b2_rows_spec = [
+        ("1701", "1", "Thuế GTGT (1701)", "gtgt_tk_by_ky", "gtgt_c2_by_ht"),
+        ("1052", "2", "Thuế TNDN (1052)", "tndn_tk_qt_by_ky", "tndn_c2_by_ht"),
+        ("1001", "3", "Thuế TNCN (1001)", "tncn_tk_th_tq_by_ky", "tncn_c2_by_ht"),
+        ("LPMB", "4", "Lệ phí môn bài (2862/2863/2864)", "lpmb_ps_by_ky", "lpmb_c2_by_ht"),
+    ]
+    for y_idx, y in enumerate(years):
+        ws_dc.cell(dc_r, 2, f"Năm {y}").font = font_year
+        for c in range(1, 8):
+            cell = ws_dc.cell(dc_r, c)
+            cell.border = border_all
+            cell.fill = year_fill
+        dc_r += 1
+
+        dc_this: Dict[str, int] = {}
+        for tm_key, stt, label, ps_key, nop_key in b2_rows_spec:
+            dc_this[tm_key] = dc_r
+            ws_dc.cell(dc_r, 1, stt).alignment = align_center
+            ws_dc.cell(dc_r, 2, label).alignment = align_left
+            if y_idx == 0:
+                ws_dc.cell(dc_r, 3, round(metrics["opening_exact"][tm_key]))
+            else:
+                ws_dc.cell(dc_r, 3, f"=G{dc_prev[tm_key]}")
+            ws_dc.cell(dc_r, 4, round(metrics[ps_key][y]))
+            ws_dc.cell(dc_r, 5, 0)
+            ws_dc.cell(dc_r, 6, round(metrics[nop_key][y]))
+            ws_dc.cell(dc_r, 7, f"=C{dc_r}+D{dc_r}+E{dc_r}-F{dc_r}")
+            for c in range(1, 8):
+                cell = ws_dc.cell(dc_r, c)
+                cell.font = font_bold if c in (2, 7) else font_regular
+                cell.border = border_all
+                if c >= 3:
+                    cell.alignment = align_right
+                    cell.number_format = num_fmt
+            dc_r += 1
+        dc_prev = dc_this
+
+    dc_widths = {1: 20, 2: 32, 3: 20, 4: 22, 5: 20, 6: 20, 7: 20, 8: 20, 9: 20}
+    for c_idx, w in dc_widths.items():
+        ws_dc.column_dimensions[get_column_letter(c_idx)].width = w
 
     wb.save(output_path)
 
