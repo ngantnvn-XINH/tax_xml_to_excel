@@ -1,0 +1,2891 @@
+# -*- coding: utf-8 -*-
+"""
+Module xuất dữ liệu tờ khai thuế và BCTC ra Excel theo ĐÚNG MẪU CHUẨN (Phiên bản v1.2):
+- Đảm bảo không thiếu dữ liệu đầu vào, không lệch dòng/cột giữa Thông tư 156 (<=2020) và Thông tư 80 (>=2021).
+- Tự động tách: Mỗi năm ra 1 file Excel riêng biệt hoặc file tổng hợp.
+- File TNCN hàng năm gồm 4 sheet đúng chuẩn:
+    1. 'TK': Tờ khai quyết toán thuế TNCN (Mẫu 05/QTT-TNCN) - Lấy tờ khai cuối cùng
+    2. '05-1': Bảng kê chi tiết cá nhân cư trú có HĐLĐ (Ánh xạ chuẩn cả TT156 và TT80)
+    3. '05-2': Bảng kê cá nhân không cư trú / vãng lai (Ánh xạ chuẩn cả TT156 và TT80)
+    4. '05-3': Bảng kê thông tin người phụ thuộc (Ánh xạ chuẩn cả TT156 và TT80)
+- File TNDN & BCTC:
+    - Sheet 'KKTNDN': Tờ khai quyết toán TNDN (Mẫu 03/TNDN - Tách chuẩn danh mục TT156 và TT80)
+    - Sheet 'BCHDKD': Báo cáo Kết quả hoạt động kinh doanh (Mẫu 03-1A/TNDN - Không lẫn chỉ tiêu tờ khai chính)
+    - Sheet 'BCTC': Bảng Cân đối kế toán (Mẫu B01-DN - Tôn trọng tuyệt đối Số đầu năm trong XML)
+- File GTGT:
+    - Sheet 'So Thue GTGT TH': Bảng kê toàn bộ tờ khai GTGT theo dòng thời gian
+    - Sheet 'So Thue GTGT Cuoi': Bảng kê tờ khai GTGT cuối cùng mỗi kỳ + Tổng cộng từng năm
+- Sheet 'Chenh lech thue GTGT - TNDN': Đối chiếu doanh thu GTGT và TNDN tự động dò tọa độ dòng.
+- Sheet 'To_Khai_Khac': Tổng hợp đầy đủ dữ liệu các tờ khai khác (Lệ phí môn bài 01/LPMB, Nhà thầu...).
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+import re
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+import openpyxl
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+from catalogs_dump import CDKT_ROWS, KKTNDN_ROWS, KQKD_ROWS
+from split_catalogs import (
+    KKTNDN_156_ROWS,
+    KKTNDN_80_ROWS,
+    KQKD_156_ROWS,
+    KQKD_80_ROWS,
+)
+from tax_parser import COMMON_INDICATOR_LABELS, TaxDeclaration
+from tncn_catalogs_dump import (
+    TNCN_MASTER_ROWS_TT80,
+    TNCN_MASTER_ROWS_TT156,
+    TNCN_TT80_ROWS,
+    TNCN_TT156_ROWS,
+)
+from tncn_templates import (
+    COLS_05_1,
+    COLS_05_2,
+    COLS_05_3,
+    MERGES_05_1,
+    MERGES_05_2,
+    MERGES_05_3,
+)
+
+HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+HEADER_FONT = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+BODY_FONT = Font(name="Calibri", size=9)
+BOLD_FONT = Font(name="Calibri", size=9, bold=True)
+SECTION_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+GRAY_HEADER_FILL = PatternFill(start_color="E7E6E6", end_color="E7E6E6", fill_type="solid")
+ERROR_FILL = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+
+THIN_BORDER = Border(
+    left=Side(style="thin", color="000000"),
+    right=Side(style="thin", color="000000"),
+    top=Side(style="thin", color="000000"),
+    bottom=Side(style="thin", color="000000"),
+)
+
+
+def sanitize_sheet_name(name: str, existing: Set[str]) -> str:
+    clean = re.sub(r"[\\/*?:\[\]]", "_", name).strip()
+    if not clean:
+        clean = "Sheet"
+    base = clean[:28] if len(clean) > 31 else clean
+    candidate = clean[:31]
+    idx = 2
+    while candidate in existing:
+        suffix = f"_{idx}"
+        candidate = f"{base[:31 - len(suffix)]}{suffix}"
+        idx += 1
+    existing.add(candidate)
+    return candidate
+
+
+def write_cell_formatted(cell: openpyxl.cell.Cell, val: Any, is_mst: bool = False) -> None:
+    cell.font = BODY_FONT
+    cell.border = THIN_BORDER
+
+    if is_mst:
+        cell.value = str(val) if val is not None else ""
+        cell.number_format = "@"
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+        return
+
+    if isinstance(val, (datetime.date, datetime.datetime)):
+        cell.value = val
+        cell.number_format = "dd/mm/yyyy"
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        return
+
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        cell.value = val
+        if isinstance(val, float) and not val.is_integer():
+            cell.number_format = "#,##0.##"
+        else:
+            cell.number_format = "#,##0"
+        cell.alignment = Alignment(horizontal="right", vertical="center")
+        return
+
+    cell.value = val
+    cell.alignment = Alignment(horizontal="left", vertical="center")
+
+
+def get_indicator_value(
+    d: TaxDeclaration,
+    code: str,
+    source_dict: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """
+    Hàm tra cứu chính xác giá trị chỉ tiêu từ tờ khai thuế XML:
+    - Tìm code gốc (VD: A1, B1, C1, ct22, [01], [04]...)
+    - Tìm biến thể: ctA1, ctB1, ct_B1, [A1], ct22, 22...
+    - Hỗ trợ truyền source_dict riêng (VD: d.kqkd_indicators cho phụ lục 03-1A/TNDN)
+      để không bị lẫn chỉ tiêu cùng tên với tờ khai chính.
+    """
+    if not code:
+        return None
+    target_map = source_dict if source_dict is not None else d.indicators
+    clean = code.replace("[", "").replace("]", "").strip()
+    if "=" in clean:
+        clean = clean.split("=")[0].strip()
+
+    candidates = [
+        code,
+        clean,
+        clean.upper(),
+        clean.lower(),
+        f"ct{clean}",
+        f"ct{clean.upper()}",
+        f"ct{clean.lower()}",
+        f"ct_{clean}",
+        f"ct_{clean.upper()}",
+        f"ct_{clean.lower()}",
+        f"[{clean}]",
+        f"ms{clean}",
+        f"ms_{clean}",
+    ]
+    if clean.isdigit():
+        int_code = str(int(clean))
+        candidates.extend([int_code, f"ct{int_code}", f"[{int_code}]"])
+        if len(clean) == 1:
+            z_code = f"0{clean}"
+            candidates.extend([z_code, f"ct{z_code}", f"[{z_code}]"])
+
+    for k in candidates:
+        if k in target_map and target_map[k] is not None:
+            return target_map[k]
+
+    cand_upper = {c.upper() for c in candidates}
+    for k, v in target_map.items():
+        if v is not None:
+            short = k.split(".")[-1]
+            if short in candidates or short.upper() in cand_upper:
+                return v
+
+    return None
+
+
+def _is_tt156_decl(d: TaxDeclaration) -> bool:
+    """Xác định tờ khai thuộc mẫu Thông tư 156/151/92 (các năm <= 2020 hoặc mã tờ khai cũ)."""
+    if d.ma_tkhai in ("01", "03", "395"):
+        return True
+    if d.ma_tkhai in ("842", "892", "953"):
+        return False
+    if d.year and d.year <= 2020:
+        return True
+    return False
+
+
+def deduplicate_gtgt_declarations(declarations: List[TaxDeclaration]) -> List[TaxDeclaration]:
+    """
+    Tự động loại bỏ các tờ khai GTGT bị trùng lặp do thư mục có nhiều file của cùng 1 tờ khai
+    (ví dụ: file rút gọn '...25M08_BS_1.xml' và file chứa mã giao dịch eTax '...08-2025_01-GTGT_BS1_1_...xml').
+    """
+    grouped: Dict[Tuple[str, str, int], List[TaxDeclaration]] = {}
+    for d in declarations:
+        mst = (d.mst or "").strip()
+        if d.tu_ngay:
+            ky_str = d.tu_ngay.strftime("%y%m")
+        else:
+            ky_str = (d.ky_kkhai or "").strip()
+        try:
+            lan = int(d.so_lan) if d.so_lan is not None and str(d.so_lan).strip() != "" else 0
+        except (ValueError, TypeError):
+            lan = 0
+        key = (mst, ky_str, lan)
+        grouped.setdefault(key, []).append(d)
+
+    deduped: List[TaxDeclaration] = []
+    for key, dlist in grouped.items():
+        if len(dlist) == 1:
+            deduped.append(dlist[0])
+        else:
+            def sort_gtgt_dups(item: TaxDeclaration):
+                nlap = item.ngay_lap or datetime.date.min
+                valid_inds = sum(1 for v in item.indicators.values() if v not in (None, 0, "", "0"))
+                app_count = sum(len(rows) for rows in item.appendices.values())
+                return (nlap, valid_inds, app_count, len(item.file_name), item.file_name)
+
+            dlist.sort(key=sort_gtgt_dups)
+            deduped.append(dlist[-1])
+
+    return deduped
+
+
+def deduplicate_declarations(declarations: List[TaxDeclaration]) -> List[TaxDeclaration]:
+    """
+    Loại bỏ các file XML trùng lặp của cùng 1 tờ khai (cùng loại thuế, MST, kỳ kê khai, số lần bổ sung)
+    trên mọi sắc thuế (GTGT, TNDN, TNCN, BCTC, Khác).
+    """
+    grouped: Dict[Tuple[str, str, str, int], List[TaxDeclaration]] = {}
+    for d in declarations:
+        mst = (d.mst or "").strip()
+        if d.tax_type == "GTGT" and d.tu_ngay:
+            ky_str = d.tu_ngay.strftime("%y%m")
+        else:
+            ky_str = str(d.year or d.ky_kkhai or "").strip()
+        try:
+            lan = int(d.so_lan) if d.so_lan is not None and str(d.so_lan).strip() != "" else 0
+        except (ValueError, TypeError):
+            lan = 0
+        key = (d.tax_type or "", mst, ky_str, lan)
+        grouped.setdefault(key, []).append(d)
+
+    deduped: List[TaxDeclaration] = []
+    for key, dlist in grouped.items():
+        if len(dlist) == 1:
+            deduped.append(dlist[0])
+        else:
+            def sort_dups(item: TaxDeclaration):
+                nlap = item.ngay_lap or datetime.date.min
+                valid_inds = sum(1 for v in item.indicators.values() if v not in (None, 0, "", "0"))
+                app_count = sum(len(rows) for rows in item.appendices.values())
+                return (nlap, valid_inds, app_count, len(item.file_name), item.file_name)
+
+            dlist.sort(key=sort_dups)
+            deduped.append(dlist[-1])
+
+    return deduped
+
+
+def filter_latest_per_year(declarations: List[TaxDeclaration]) -> List[TaxDeclaration]:
+    """
+    Với TNDN, TNCN, BCTC, Khác: Nhóm theo (MST, Năm).
+    Mỗi năm chỉ giữ lại đúng 1 tờ khai nộp cuối cùng (so_lan cao nhất, ngay_lap mới nhất).
+    Nếu trùng cả số lần và ngày lập (do file trùng lặp), ưu tiên file có dữ liệu đầy đủ nhất.
+    """
+    grouped: Dict[Tuple[str, int], List[TaxDeclaration]] = {}
+    for d in declarations:
+        y = d.year or 0
+        k = (d.mst or "", y)
+        grouped.setdefault(k, []).append(d)
+
+    latest_list: List[TaxDeclaration] = []
+    for k, decl_list in grouped.items():
+        def sort_key(item: TaxDeclaration):
+            try:
+                lan = int(item.so_lan) if item.so_lan is not None and str(item.so_lan).strip() != "" else 0
+            except (ValueError, TypeError):
+                lan = 0
+            nlap = item.ngay_lap or datetime.date.min
+            valid_inds = sum(1 for v in item.indicators.values() if v not in (None, 0, "", "0"))
+            app_count = sum(len(rows) for rows in item.appendices.values())
+            return (lan, nlap, valid_inds, app_count, len(item.file_name), item.file_name)
+
+        decl_list.sort(key=sort_key)
+        latest = decl_list[-1]
+        if len(decl_list) > 1:
+            merged_apps = dict(latest.appendices)
+            for prev in reversed(decl_list[:-1]):
+                for app_name, app_rows in prev.appendices.items():
+                    if "khbs" in app_name.lower():
+                        continue
+                    if not merged_apps.get(app_name) and app_rows:
+                        merged_apps[app_name] = app_rows
+                if not latest.kqkd_indicators and prev.kqkd_indicators:
+                    latest.kqkd_indicators = dict(prev.kqkd_indicators)
+            latest.appendices = merged_apps
+        latest_list.append(latest)
+
+    latest_list.sort(key=lambda d: (d.mst or "", d.year or 0, d.tu_ngay or datetime.date.min))
+    return latest_list
+
+
+# ==============================================================================
+# 1. SHEET KKTNDN: Tờ khai Quyết toán TNDN (Mẫu 03/TNDN)
+# Tách riêng TT156 (các năm <= 2020, maTKhai='03') và TT80 (các năm >= 2021, maTKhai='892')
+# ==============================================================================
+def write_sheet_kktndn(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+) -> None:
+    sname = sanitize_sheet_name("KKTNDN", existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    sorted_decls = sorted(declarations, key=lambda d: (d.year or 0, d.tu_ngay or datetime.date.min))
+    decls_156 = [d for d in sorted_decls if _is_tt156_decl(d)]
+    decls_80 = [d for d in sorted_decls if not _is_tt156_decl(d)]
+
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 24
+    ws.row_dimensions[3].height = 18
+
+    internal_lookup_only_codes = {"ten_loaiMien", "thueTNDN_tamnop_sxkd", "thueTNDN_tamnop_cnbds"}
+
+    def write_kktndn_block(c_start: int, decls: List[TaxDeclaration], catalog: List[Tuple[str, str, str]]) -> int:
+        c_end = c_start + 2 + len(decls)
+        for idx, d in enumerate(decls):
+            c_yr = ws.cell(1, c_start + 3 + idx, d.year or d.ky_kkhai)
+            c_yr.font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
+            c_yr.alignment = Alignment(horizontal="center", vertical="center")
+            c_yr.border = THIN_BORDER
+
+        ws.cell(2, c_start, "STT")
+        ws.cell(2, c_start + 1, "Chỉ tiêu")
+        ws.cell(2, c_start + 2, "Mã chỉ tiêu")
+        for idx in range(len(decls)):
+            ws.cell(2, c_start + 3 + idx, "Số tiền")
+
+        ws.cell(3, c_start, -1)
+        ws.cell(3, c_start + 1, -2)
+        ws.cell(3, c_start + 2, -3)
+        for idx in range(len(decls)):
+            ws.cell(3, c_start + 3 + idx, -4)
+
+        for col in range(c_start, c_end + 1):
+            cell2 = ws.cell(2, col)
+            cell2.fill = GRAY_HEADER_FILL
+            cell2.font = BOLD_FONT
+            cell2.border = THIN_BORDER
+            cell2.alignment = Alignment(horizontal="center", vertical="center")
+
+            cell3 = ws.cell(3, col)
+            cell3.font = BODY_FONT
+            cell3.border = THIN_BORDER
+            cell3.alignment = Alignment(horizontal="center", vertical="center")
+
+        cur_row = 4
+        for stt, desc, code in catalog:
+            if not stt and not desc and not code:
+                continue
+            display_code = "" if code in internal_lookup_only_codes else code
+            c_stt = ws.cell(cur_row, c_start, stt)
+            c_desc = ws.cell(cur_row, c_start + 1, desc)
+            c_code = ws.cell(cur_row, c_start + 2, display_code)
+
+            is_major_letter = stt in ("A", "B", "C", "D", "E", "G", "H", "I") and not any(
+                display_code.endswith(digit) for digit in "0123456789"
+            )
+            # Kiểm tra xem dòng mục lớn (như D, E, G, H, I) có số liệu chỉ tiêu thực tế trong XML không
+            has_major_value = is_major_letter and (
+                stt in ("E", "G", "I")
+                or any(get_indicator_value(d, code) is not None for d in decls)
+            )
+
+            if is_major_letter:
+                for cell in (c_stt, c_desc, c_code):
+                    cell.font = BOLD_FONT
+                    cell.fill = SECTION_FILL
+                    cell.border = THIN_BORDER
+                c_stt.alignment = Alignment(horizontal="center", vertical="center")
+                c_code.alignment = Alignment(horizontal="center", vertical="center")
+                for idx, d in enumerate(decls):
+                    val = get_indicator_value(d, code) if (code and stt not in ("A", "B", "C")) else None
+                    cell = ws.cell(cur_row, c_start + 3 + idx)
+                    if has_major_value and stt not in ("A", "B", "C"):
+                        write_cell_formatted(cell, val if val is not None else 0)
+                        cell.font = BOLD_FONT
+                    else:
+                        cell.value = ""
+                    cell.fill = SECTION_FILL
+                    cell.border = THIN_BORDER
+            else:
+                c_stt.font = BODY_FONT
+                c_desc.font = BODY_FONT
+                c_code.font = BODY_FONT
+                c_stt.border = THIN_BORDER
+                c_desc.border = THIN_BORDER
+                c_code.border = THIN_BORDER
+                c_stt.alignment = Alignment(horizontal="center", vertical="center")
+                c_code.alignment = Alignment(horizontal="center", vertical="center")
+
+                for idx, d in enumerate(decls):
+                    val = get_indicator_value(d, code) if code else None
+                    cell = ws.cell(cur_row, c_start + 3 + idx)
+                    if code == "ten_loaiMien":
+                        write_cell_formatted(cell, val if val is not None else "")
+                    elif not code and desc == "Trong đó:":
+                        write_cell_formatted(cell, 0)
+                    else:
+                        write_cell_formatted(cell, val if val is not None else 0)
+                    cell.border = THIN_BORDER
+
+            cur_row += 1
+
+        ws.column_dimensions[get_column_letter(c_start)].width = 7
+        ws.column_dimensions[get_column_letter(c_start + 1)].width = 54
+        ws.column_dimensions[get_column_letter(c_start + 2)].width = 12
+        for idx in range(len(decls)):
+            ws.column_dimensions[get_column_letter(c_start + 3 + idx)].width = 16
+
+        return c_end
+
+    if decls_156 and decls_80:
+        c156_end = write_kktndn_block(2, decls_156, KKTNDN_156_ROWS)
+        c_sep = c156_end + 1
+        ws.column_dimensions[get_column_letter(c_sep)].width = 6
+        write_kktndn_block(c_sep + 1, decls_80, KKTNDN_80_ROWS)
+    elif decls_156:
+        write_kktndn_block(2, decls_156, KKTNDN_156_ROWS)
+    else:
+        write_kktndn_block(2, decls_80 if decls_80 else sorted_decls, KKTNDN_80_ROWS)
+
+    ws.column_dimensions["A"].width = 3
+    ws.freeze_panes = "C4"
+
+
+# ==============================================================================
+# 2. SHEET BCHDKD: Báo cáo kết quả hoạt động kinh doanh (Phụ lục 03-1A/TNDN)
+# Tách riêng TT156 (các năm <= 2020, mã [01]..[19]) và TT80 (các năm >= 2021, mã [04]..[22])
+# Đọc trực tiếp từ kqkd_indicators (03-1A/TNDN), không bị nhiễu bởi chỉ tiêu tờ khai chính.
+# ==============================================================================
+def write_sheet_kqkd(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+) -> None:
+    sname = sanitize_sheet_name("BCHDKD", existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    sorted_decls = sorted(declarations, key=lambda d: (d.year or 0, d.tu_ngay or datetime.date.min))
+    decls_156 = [d for d in sorted_decls if _is_tt156_decl(d)]
+    decls_80 = [d for d in sorted_decls if not _is_tt156_decl(d)]
+
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 24
+    ws.row_dimensions[3].height = 18
+    ws.row_dimensions[4].height = 20
+
+    def write_kqkd_block(
+        c_start: int,
+        decls: List[TaxDeclaration],
+        catalog: List[Tuple[str, str, str]],
+        title_text: str,
+    ) -> int:
+        c_end = c_start + 2 + len(decls)
+        for idx, d in enumerate(decls):
+            c_yr = ws.cell(1, c_start + 3 + idx, d.year or d.ky_kkhai)
+            c_yr.font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
+            c_yr.alignment = Alignment(horizontal="center", vertical="center")
+            c_yr.border = THIN_BORDER
+
+        ws.cell(2, c_start, "STT")
+        ws.cell(2, c_start + 1, "Chỉ tiêu")
+        ws.cell(2, c_start + 2, "Mã chỉ tiêu")
+        for idx in range(len(decls)):
+            ws.cell(2, c_start + 3 + idx, "Số tiền")
+
+        ws.cell(3, c_start, -1)
+        ws.cell(3, c_start + 1, -2)
+        ws.cell(3, c_start + 2, -3)
+        for idx in range(len(decls)):
+            ws.cell(3, c_start + 3 + idx, -4)
+
+        for col in range(c_start, c_end + 1):
+            cell2 = ws.cell(2, col)
+            cell2.fill = GRAY_HEADER_FILL
+            cell2.font = BOLD_FONT
+            cell2.border = THIN_BORDER
+            cell2.alignment = Alignment(horizontal="center", vertical="center")
+
+            cell3 = ws.cell(3, col)
+            cell3.font = BODY_FONT
+            cell3.border = THIN_BORDER
+            cell3.alignment = Alignment(horizontal="center", vertical="center")
+
+        cell_t = ws.cell(4, c_start + 1, title_text)
+        cell_t.font = BOLD_FONT
+        for col in range(c_start, c_end + 1):
+            cell4 = ws.cell(4, col)
+            cell4.fill = SECTION_FILL
+            cell4.border = THIN_BORDER
+
+        cur_row = 5
+        for stt, desc, code in catalog:
+            c_stt = ws.cell(cur_row, c_start, stt)
+            c_desc = ws.cell(cur_row, c_start + 1, desc)
+            c_code = ws.cell(cur_row, c_start + 2, code)
+
+            c_stt.font = BODY_FONT
+            c_desc.font = BODY_FONT
+            c_code.font = BODY_FONT
+            c_stt.border = THIN_BORDER
+            c_desc.border = THIN_BORDER
+            c_code.border = THIN_BORDER
+            c_stt.alignment = Alignment(horizontal="center", vertical="center")
+            c_code.alignment = Alignment(horizontal="center", vertical="center")
+
+            for idx, d in enumerate(decls):
+                # Ưu tiên tuyệt đối kqkd_indicators từ phụ lục 03-1A/TNDN; chỉ fallback sang d.indicators khi kqkd_indicators rỗng (như unit test giả lập)
+                src = d.kqkd_indicators if d.kqkd_indicators else d.indicators
+                val = get_indicator_value(d, code, source_dict=src) if code else None
+                cell = ws.cell(cur_row, c_start + 3 + idx)
+                write_cell_formatted(cell, val if val is not None else 0)
+                cell.border = THIN_BORDER
+
+            cur_row += 1
+
+        ws.column_dimensions[get_column_letter(c_start)].width = 7
+        ws.column_dimensions[get_column_letter(c_start + 1)].width = 54
+        ws.column_dimensions[get_column_letter(c_start + 2)].width = 12
+        for idx in range(len(decls)):
+            ws.column_dimensions[get_column_letter(c_start + 3 + idx)].width = 16
+
+        return c_end
+
+    if decls_156 and decls_80:
+        c156_end = write_kqkd_block(
+            2, decls_156, KQKD_156_ROWS, "Kết quả kinh doanh ghi nhận theo báo cáo tài chính."
+        )
+        c_sep = c156_end + 1
+        ws.column_dimensions[get_column_letter(c_sep)].width = 6
+        write_kqkd_block(
+            c_sep + 1, decls_80, KQKD_80_ROWS, "Kết quả kinh doanh ghi nhận theo báo cáo tài chính:"
+        )
+    elif decls_156:
+        write_kqkd_block(2, decls_156, KQKD_156_ROWS, "Kết quả kinh doanh ghi nhận theo báo cáo tài chính.")
+    else:
+        write_kqkd_block(
+            2,
+            decls_80 if decls_80 else sorted_decls,
+            KQKD_80_ROWS,
+            "Kết quả kinh doanh ghi nhận theo báo cáo tài chính:",
+        )
+
+    ws.column_dimensions["A"].width = 3
+    ws.freeze_panes = "C5"
+
+
+# ==============================================================================
+# 3. SHEET BCTC: Bảng cân đối kế toán (Mẫu B01-DN / B01a-DNN)
+# Tách riêng 2 khối: Khối các năm <= 2020 bên trái, Khối các năm >= 2021 bên phải.
+# Mỗi năm gồm 2 cột 'Số cuối năm' và 'Số đầu năm' đóng khung viền rõ nét.
+# Tôn trọng tuyệt đối Số đầu năm trong XML khi file XML có khai khối <SoDauNam>
+# (không tự ý ghi đè các chỉ tiêu bằng 0 do phân loại lại đầu năm).
+# Chỉ kế thừa Số cuối năm trước khi file XML hoàn toàn không có dữ liệu <SoDauNam>.
+# ==============================================================================
+def write_sheet_bctc_cdkt(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+) -> None:
+    sname = sanitize_sheet_name("BCTC", existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    sorted_decls = sorted(declarations, key=lambda d: (d.year or 0, d.tu_ngay or datetime.date.min))
+    decls_156 = [d for d in sorted_decls if d.year and d.year <= 2020]
+    decls_80 = [d for d in sorted_decls if not (d.year and d.year <= 2020)]
+
+    ws.row_dimensions[3].height = 22
+    ws.row_dimensions[4].height = 24
+    ws.row_dimensions[5].height = 18
+
+    def _decl_has_any_sodaunam(d: TaxDeclaration) -> bool:
+        if d.has_bctc_sodaunam:
+            return True
+        for k, v in d.indicators.items():
+            if v not in (None, 0, "0", ""):
+                kl = k.lower()
+                if "khonglientuc" not in kl and (
+                    kl.endswith("_dau")
+                    or kl.endswith("_sodaunam")
+                    or any(t in kl for t in ("sodaunam", "sodauky", "dauky", "daunam"))
+                ):
+                    return True
+        return False
+
+    has_dau_cache: Dict[int, bool] = {id(d): _decl_has_any_sodaunam(d) for d in sorted_decls}
+
+    def get_bctc_val_pair(d: TaxDeclaration, prev_d: Optional[TaxDeclaration], code_str: str) -> Tuple[Any, Any]:
+        # 1. Tìm số cuối năm
+        v_cuoi = get_indicator_value(d, f"{code_str}_cuoi")
+        if v_cuoi is None:
+            v_cuoi = get_indicator_value(d, f"ms{code_str}_cuoi")
+        if v_cuoi is None:
+            v_cuoi = get_indicator_value(d, f"ct{code_str}_cuoi")
+        if v_cuoi is None:
+            v_cuoi = get_indicator_value(d, f"{code_str}_socuoinam")
+        if v_cuoi is None:
+            for k, v in d.indicators.items():
+                kl = k.lower()
+                if any(x in kl for x in ("socuoinam", "socuoi", "cuoiky", "cuoinam", "namnay")):
+                    if kl.endswith(f".ct{code_str}") or kl.endswith(f".ms{code_str}") or kl.endswith(f".{code_str}"):
+                        if "khonglientuc" not in kl or v_cuoi is None:
+                            if v not in (None, "", 0) or v_cuoi is None:
+                                v_cuoi = v
+        if v_cuoi is None:
+            v_cuoi = get_indicator_value(d, code_str)
+        if v_cuoi is None:
+            v_cuoi = get_indicator_value(d, f"ct{code_str}")
+
+        # 2. Tìm số đầu năm
+        v_dau = get_indicator_value(d, f"{code_str}_dau")
+        if v_dau is None:
+            v_dau = get_indicator_value(d, f"ms{code_str}_dau")
+        if v_dau is None:
+            v_dau = get_indicator_value(d, f"ct{code_str}_dau")
+        if v_dau is None:
+            v_dau = get_indicator_value(d, f"{code_str}_sodaunam")
+        if v_dau is None:
+            for k, v in d.indicators.items():
+                kl = k.lower()
+                if any(x in kl for x in ("sodaunam", "sodau", "dauky", "daunam", "namtruoc", "kytruoc")):
+                    if kl.endswith(f".ct{code_str}") or kl.endswith(f".ms{code_str}") or kl.endswith(f".{code_str}"):
+                        if "khonglientuc" not in kl or v_dau is None:
+                            if v not in (None, "", 0) or v_dau is None:
+                                v_dau = v
+                                if v not in (None, "", 0):
+                                    break
+
+        # 3. Chỉ kế thừa số cuối năm trước khi file XML năm hiện tại hoàn toàn không có dữ liệu <SoDauNam>
+        if not has_dau_cache.get(id(d), False) and (v_dau is None or v_dau == 0) and prev_d is not None:
+            prev_cuoi = get_indicator_value(prev_d, f"{code_str}_cuoi")
+            if prev_cuoi is None:
+                prev_cuoi = get_indicator_value(prev_d, f"ms{code_str}_cuoi")
+            if prev_cuoi is None:
+                prev_cuoi = get_indicator_value(prev_d, f"ct{code_str}_cuoi")
+            if prev_cuoi is None:
+                prev_cuoi = get_indicator_value(prev_d, code_str)
+            if prev_cuoi is None:
+                prev_cuoi = get_indicator_value(prev_d, f"ct{code_str}")
+            if prev_cuoi is not None and prev_cuoi != 0:
+                v_dau = prev_cuoi
+
+        return (v_cuoi if v_cuoi is not None else 0, v_dau if v_dau is not None else 0)
+
+    def write_bctc_block(c_start: int, decls: List[TaxDeclaration]) -> int:
+        c_end = c_start + 2 + len(decls) * 2
+
+        # Hàng 3: Năm
+        for idx, d in enumerate(decls):
+            c1 = c_start + 3 + idx * 2
+            c2 = c1 + 1
+            ws.merge_cells(start_row=3, start_column=c1, end_row=3, end_column=c2)
+            c_yr = ws.cell(3, c1, d.year or d.ky_kkhai)
+            c_yr.font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
+            c_yr.alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(3, c1).border = THIN_BORDER
+            ws.cell(3, c2).border = THIN_BORDER
+
+        # Hàng 4: Tiêu đề
+        ws.cell(4, c_start, "TÀI SẢN ")
+        ws.cell(4, c_start + 1, "Mã số")
+        ws.cell(4, c_start + 2, "Thuyết minh")
+        for idx in range(len(decls)):
+            c1 = c_start + 3 + idx * 2
+            c2 = c1 + 1
+            ws.cell(4, c1, "Số cuối năm")
+            ws.cell(4, c2, "Số đầu năm")
+
+        # Hàng 5: Số thứ tự cột
+        ws.cell(5, c_start, 1)
+        ws.cell(5, c_start + 1, 2)
+        ws.cell(5, c_start + 2, 3)
+        for idx in range(len(decls)):
+            c1 = c_start + 3 + idx * 2
+            c2 = c1 + 1
+            ws.cell(5, c1, 4)
+            ws.cell(5, c2, 5)
+
+        for col in range(c_start, c_end + 1):
+            cell4 = ws.cell(4, col)
+            cell4.fill = GRAY_HEADER_FILL
+            cell4.font = BOLD_FONT
+            cell4.border = THIN_BORDER
+            cell4.alignment = Alignment(horizontal="center", vertical="center")
+
+            cell5 = ws.cell(5, col)
+            cell5.font = BODY_FONT
+            cell5.border = THIN_BORDER
+            cell5.alignment = Alignment(horizontal="center", vertical="center")
+
+        cur_row = 6
+        for c1_val, c2_val, c3_val in CDKT_ROWS:
+            c_ts = ws.cell(cur_row, c_start, c1_val)
+            c_ms = ws.cell(cur_row, c_start + 1, c2_val)
+            c_tm = ws.cell(cur_row, c_start + 2, c3_val)
+
+            is_major = (
+                c1_val.startswith("A -")
+                or c1_val.startswith("B -")
+                or c1_val.startswith("C -")
+                or c1_val.startswith("D -")
+                or "TỔNG CỘNG" in c1_val
+            )
+            is_sub = (
+                c1_val.startswith("I.")
+                or c1_val.startswith("II.")
+                or c1_val.startswith("III.")
+                or c1_val.startswith("IV.")
+                or c1_val.startswith("V.")
+                or c1_val.startswith("VI.")
+                or c1_val.startswith("I-")
+            )
+
+            c_ms.alignment = Alignment(horizontal="center", vertical="center")
+            c_tm.alignment = Alignment(horizontal="center", vertical="center")
+
+            for cell in (c_ts, c_ms, c_tm):
+                cell.font = BOLD_FONT if (is_major or is_sub) else BODY_FONT
+                cell.border = THIN_BORDER
+                if is_major:
+                    cell.fill = SECTION_FILL
+
+            code_str = str(c2_val).strip()
+
+            for idx, d in enumerate(decls):
+                c_cuoi = c_start + 3 + idx * 2
+                c_dau = c_cuoi + 1
+
+                prev_d = None
+                curr_year = d.year or 0
+                for cand in sorted_decls:
+                    if cand.year and cand.year == curr_year - 1:
+                        prev_d = cand
+                        break
+
+                v_cuoi, v_dau = get_bctc_val_pair(d, prev_d, code_str)
+
+                cell_c = ws.cell(cur_row, c_cuoi)
+                cell_d = ws.cell(cur_row, c_dau)
+                write_cell_formatted(cell_c, v_cuoi)
+                write_cell_formatted(cell_d, v_dau)
+                cell_c.border = THIN_BORDER
+                cell_d.border = THIN_BORDER
+                if is_major or is_sub:
+                    cell_c.font = BOLD_FONT
+                    cell_d.font = BOLD_FONT
+                if is_major:
+                    cell_c.fill = SECTION_FILL
+                    cell_d.fill = SECTION_FILL
+
+            cur_row += 1
+
+        ws.column_dimensions[get_column_letter(c_start)].width = 54
+        ws.column_dimensions[get_column_letter(c_start + 1)].width = 10
+        ws.column_dimensions[get_column_letter(c_start + 2)].width = 14
+        for idx in range(len(decls)):
+            c1 = c_start + 3 + idx * 2
+            c2 = c1 + 1
+            ws.column_dimensions[get_column_letter(c1)].width = 18
+            ws.column_dimensions[get_column_letter(c2)].width = 18
+
+        return c_end
+
+    if decls_156 and decls_80:
+        c156_end = write_bctc_block(1, decls_156)
+        c_sep1 = c156_end + 1
+        c_sep2 = c156_end + 2
+        ws.column_dimensions[get_column_letter(c_sep1)].width = 5
+        ws.column_dimensions[get_column_letter(c_sep2)].width = 5
+        write_bctc_block(c_sep2 + 1, decls_80)
+    elif decls_156:
+        write_bctc_block(1, decls_156)
+    else:
+        write_bctc_block(1, decls_80 if decls_80 else sorted_decls)
+
+    ws.freeze_panes = "D6"
+
+
+# ==============================================================================
+# 4. CÁC HÀM XUẤT SHEET TNCN: SHEET TỔNG HỢP VÀ CÁC SHEET TỜ KHAI RIÊNG (TK, 05-1, 05-2, 05-3)
+# ==============================================================================
+def write_sheet_tncn_master(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+) -> None:
+    """
+    Xuất tờ khai quyết toán TNCN của tất cả các năm vào DUY NHẤT 1 SHEET 'TNCN' trong file tổng hợp.
+    - Khối bên trái: Bảng theo TT156 (áp dụng cho các năm <= 2020, maTKhai='395')
+    - Khối bên phải: Bảng theo TT80 (áp dụng cho các năm >= 2021, maTKhai='953')
+    """
+    sname = sanitize_sheet_name("TNCN", existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    latest_tncn = filter_latest_per_year(declarations)
+    latest_tncn = sorted(latest_tncn, key=lambda d: d.year or 0)
+
+    decls_156 = [d for d in latest_tncn if _is_tt156_decl(d)]
+    decls_80 = [d for d in latest_tncn if not _is_tt156_decl(d)]
+
+    # 1. Khối TT156 (nếu có các năm <= 2020)
+    if decls_156:
+        c_156_start = 3
+        c_156_end = c_156_start + 3 + len(decls_156)
+
+        for i, d in enumerate(decls_156):
+            c_yr = c_156_start + 4 + i
+            c_cell = ws.cell(1, c_yr, d.year)
+            c_cell.font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
+            c_cell.alignment = Alignment(horizontal="center", vertical="center")
+            c_cell.border = THIN_BORDER
+
+        for r_idx, stt, desc, code, dvt in TNCN_MASTER_ROWS_TT156:
+            if r_idx == 1:
+                continue
+            elif r_idx == 2:
+                headers = ["STT", "Chỉ tiêu", "Mã chỉ tiêu", "Đơn vị tính"]
+                for col_offset, h in enumerate(headers):
+                    cell = ws.cell(2, c_156_start + col_offset, h)
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                for i, d in enumerate(decls_156):
+                    cell = ws.cell(2, c_156_start + 4 + i, "Số người/ Số tiền")
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif r_idx in (24, 26):
+                continue
+            elif r_idx == 25:
+                cell = ws.cell(25, c_156_start, stt)
+                cell.font = BOLD_FONT
+                cell.fill = SECTION_FILL
+                ws.merge_cells(start_row=25, start_column=c_156_start, end_row=25, end_column=c_156_end)
+                for col_m in range(c_156_start, c_156_end + 1):
+                    ws.cell(25, col_m).border = THIN_BORDER
+                    ws.cell(25, col_m).fill = SECTION_FILL
+            elif r_idx == 27:
+                headers = ["STT", "Chỉ tiêu", "Mã chỉ tiêu", "Đơn vị tính"]
+                for col_offset, h in enumerate(headers):
+                    cell = ws.cell(27, c_156_start + col_offset, h)
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                for i, d in enumerate(decls_156):
+                    cell = ws.cell(27, c_156_start + 4 + i, "Số người/ Số tiền")
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                ws.cell(r_idx, c_156_start, stt).alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(r_idx, c_156_start + 1, desc).alignment = Alignment(horizontal="left", vertical="center")
+                ws.cell(r_idx, c_156_start + 2, code).alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(r_idx, c_156_start + 3, dvt).alignment = Alignment(horizontal="center", vertical="center")
+                for col_offset in range(4):
+                    ws.cell(r_idx, c_156_start + col_offset).font = BODY_FONT
+                    ws.cell(r_idx, c_156_start + col_offset).border = THIN_BORDER
+
+                for i, d in enumerate(decls_156):
+                    c_yr = c_156_start + 4 + i
+                    cell = ws.cell(r_idx, c_yr)
+                    val = get_indicator_value(d, code) if code else None
+                    write_cell_formatted(cell, val if val is not None else 0)
+                    if dvt != "VNĐ":
+                        cell.number_format = "#,##0"
+                    cell.border = THIN_BORDER
+                    cell.font = BODY_FONT
+
+        ws.merge_cells(start_row=3, start_column=c_156_start, end_row=4, end_column=c_156_start)
+
+        ws.column_dimensions[get_column_letter(c_156_start)].width = 6
+        ws.column_dimensions[get_column_letter(c_156_start + 1)].width = 50
+        ws.column_dimensions[get_column_letter(c_156_start + 2)].width = 14
+        ws.column_dimensions[get_column_letter(c_156_start + 3)].width = 12
+        for i in range(len(decls_156)):
+            ws.column_dimensions[get_column_letter(c_156_start + 4 + i)].width = 16
+
+    # 2. Khối TT80 (các năm >= 2021)
+    if decls_80:
+        if decls_156:
+            c_sep = c_156_end + 1
+            ws.column_dimensions[get_column_letter(c_sep)].width = 10
+            c_80_start = c_sep + 1
+        else:
+            c_80_start = 3
+
+        c_80_end = c_80_start + 3 + len(decls_80)
+
+        for i, d in enumerate(decls_80):
+            c_yr = c_80_start + 4 + i
+            c_cell = ws.cell(1, c_yr, d.year)
+            c_cell.font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
+            c_cell.alignment = Alignment(horizontal="center", vertical="center")
+            c_cell.border = THIN_BORDER
+
+        for r_idx, stt, desc, code, dvt in TNCN_MASTER_ROWS_TT80:
+            if r_idx == 1:
+                continue
+            elif r_idx == 2:
+                headers = ["STT", "Chỉ tiêu", "Mã chỉ tiêu", "Đơn vị tính"]
+                for col_offset, h in enumerate(headers):
+                    cell = ws.cell(2, c_80_start + col_offset, h)
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                for i, d in enumerate(decls_80):
+                    cell = ws.cell(2, c_80_start + 4 + i, "Số người/ Số tiền")
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif r_idx in (22, 24):
+                continue
+            elif r_idx == 23:
+                cell = ws.cell(23, c_80_start, stt)
+                cell.font = BOLD_FONT
+                cell.fill = SECTION_FILL
+                ws.merge_cells(start_row=23, start_column=c_80_start, end_row=23, end_column=c_80_end)
+                for col_m in range(c_80_start, c_80_end + 1):
+                    ws.cell(23, col_m).border = THIN_BORDER
+                    ws.cell(23, col_m).fill = SECTION_FILL
+            elif r_idx == 25:
+                headers = ["STT", "Chỉ tiêu", "Mã chỉ tiêu", "Đơn vị tính"]
+                for col_offset, h in enumerate(headers):
+                    cell = ws.cell(25, c_80_start + col_offset, h)
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                for i, d in enumerate(decls_80):
+                    cell = ws.cell(25, c_80_start + 4 + i, "Số người/ Số tiền")
+                    cell.font = BOLD_FONT
+                    cell.fill = GRAY_HEADER_FILL
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                ws.cell(r_idx, c_80_start, stt).alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(r_idx, c_80_start + 1, desc).alignment = Alignment(horizontal="left", vertical="center")
+                ws.cell(r_idx, c_80_start + 2, code).alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(r_idx, c_80_start + 3, dvt).alignment = Alignment(horizontal="center", vertical="center")
+                for col_offset in range(4):
+                    ws.cell(r_idx, c_80_start + col_offset).font = BODY_FONT
+                    ws.cell(r_idx, c_80_start + col_offset).border = THIN_BORDER
+
+                for i, d in enumerate(decls_80):
+                    c_yr = c_80_start + 4 + i
+                    cell = ws.cell(r_idx, c_yr)
+                    val = get_indicator_value(d, code) if code else None
+                    write_cell_formatted(cell, val if val is not None else 0)
+                    if dvt != "VNĐ":
+                        cell.number_format = "#,##0"
+                    cell.border = THIN_BORDER
+                    cell.font = BODY_FONT
+
+        ws.merge_cells(start_row=3, start_column=c_80_start, end_row=4, end_column=c_80_start)
+        ws.merge_cells(start_row=27, start_column=c_80_start, end_row=28, end_column=c_80_start)
+
+        ws.column_dimensions[get_column_letter(c_80_start)].width = 6
+        ws.column_dimensions[get_column_letter(c_80_start + 1)].width = 50
+        ws.column_dimensions[get_column_letter(c_80_start + 2)].width = 12
+        ws.column_dimensions[get_column_letter(c_80_start + 3)].width = 14
+        for i in range(len(decls_80)):
+            ws.column_dimensions[get_column_letter(c_80_start + 4 + i)].width = 15
+
+    ws.column_dimensions["A"].width = 3
+    ws.column_dimensions["B"].width = 3
+    ws.freeze_panes = "C3"
+
+
+def write_sheet_tncn_tk(ws: openpyxl.worksheet.worksheet.Worksheet, d: TaxDeclaration) -> None:
+    """
+    Xuất sheet 'TK' của tờ khai quyết toán TNCN theo đúng mẫu thực tế:
+    - Nếu thuộc Thông tư 156/92 (năm <= 2020 hoặc maTKhai='395'): Dùng bộ mã [21]..[46]
+    - Nếu thuộc Thông tư 80 (năm >= 2021 hoặc maTKhai='953'): Dùng bộ mã [16]..[41]
+    """
+    yr = d.year or d.ky_kkhai
+    is_tt156 = _is_tt156_decl(d)
+    rows_catalog = TNCN_TT156_ROWS if is_tt156 else TNCN_TT80_ROWS
+
+    ws.cell(1, 6, yr).font = Font(name="Calibri", size=11, bold=True, color="1F4E78")
+    ws.cell(1, 6).alignment = Alignment(horizontal="center", vertical="center")
+
+    headers = ["", "STT", "Chỉ tiêu", "Mã chỉ tiêu", "Đơn vị tính", "Số người / Số tiền"]
+    ws.append(headers)
+    ws.row_dimensions[2].height = 24
+
+    for c in range(2, 7):
+        cell = ws.cell(2, c)
+        cell.fill = GRAY_HEADER_FILL
+        cell.font = BOLD_FONT
+        cell.border = THIN_BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    cur_row = 3
+    for stt, desc, code, dvt in rows_catalog:
+        c_stt = ws.cell(cur_row, 2, stt)
+        c_desc = ws.cell(cur_row, 3, desc)
+        c_code = ws.cell(cur_row, 4, code)
+        c_dvt = ws.cell(cur_row, 5, dvt)
+
+        is_sec = stt == "II" or "NGHĨA VỤ QUYẾT TOÁN" in stt or (not code and not dvt)
+        if is_sec:
+            for cell in (c_stt, c_desc, c_code, c_dvt):
+                cell.font = BOLD_FONT
+                cell.fill = SECTION_FILL
+                cell.border = THIN_BORDER
+            ws.cell(cur_row, 6, "").fill = SECTION_FILL
+            ws.cell(cur_row, 6).border = THIN_BORDER
+            cur_row += 1
+            continue
+
+        c_stt.alignment = Alignment(horizontal="center", vertical="center")
+        c_code.alignment = Alignment(horizontal="center", vertical="center")
+        c_dvt.alignment = Alignment(horizontal="center", vertical="center")
+        for cell in (c_stt, c_desc, c_code, c_dvt):
+            cell.font = BODY_FONT
+            cell.border = THIN_BORDER
+
+        val = get_indicator_value(d, code)
+        write_cell_formatted(ws.cell(cur_row, 6), val if val is not None else 0)
+        cur_row += 1
+
+    ws.column_dimensions["A"].width = 3
+    ws.column_dimensions["B"].width = 8
+    ws.column_dimensions["C"].width = 54
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 12
+    ws.column_dimensions["F"].width = 18
+    ws.freeze_panes = "A3"
+
+
+def _first_not_none(row_dict: Dict[str, Any], keys: Sequence[str]) -> Any:
+    """Tìm giá trị đầu tiên khác None trong row_dict theo danh sách khóa ưu tiên (không làm mất giá trị 0)."""
+    for k in keys:
+        if not k:
+            continue
+        for variant in (k, k.lower(), k.upper()):
+            if variant in row_dict and row_dict[variant] is not None:
+                return row_dict[variant]
+    return None
+
+
+def write_sheet_tncn_pl(
+    ws: openpyxl.worksheet.worksheet.Worksheet,
+    cols_def: List[Tuple[str, str, str]],
+    merges_def: List[str],
+    rows: List[Dict[str, Any]],
+    sheet_type: str,
+    is_tt156: bool = False,
+) -> None:
+    """
+    Xuất các phụ lục 05-1, 05-2, 05-3 theo đúng định dạng 3 dòng tiêu đề của HTKK.
+    Tự động ánh xạ chuẩn xác 100% các thẻ XML của cả Thông tư 156/92 (<=2020) và Thông tư 80 (>=2021),
+    không để lệch cột hoặc mất dữ liệu!
+    """
+    h1 = [c[0] for c in cols_def]
+    h2 = [c[1] for c in cols_def]
+    h3 = [c[2] for c in cols_def]
+
+    ws.append(h1)
+    ws.append(h2)
+    ws.append(h3)
+
+    ws.row_dimensions[1].height = 28
+    ws.row_dimensions[2].height = 28
+    ws.row_dimensions[3].height = 18
+
+    for m in merges_def:
+        try:
+            ws.merge_cells(m)
+        except Exception:
+            pass
+
+    for r in (1, 2, 3):
+        for c in range(1, len(cols_def) + 1):
+            cell = ws.cell(r, c)
+            cell.fill = GRAY_HEADER_FILL
+            cell.font = BOLD_FONT
+            cell.border = THIN_BORDER
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # Định nghĩa danh sách khóa tra cứu chính xác cho từng cột theo Thông tư 80 và Thông tư 156/92
+    if sheet_type == "05-1":
+        if is_tt156:
+            # Trong TT156/92 (maTKhai=395): caNhanNNUQQT là checkbox cột [11], ct11 là Tổng TNCT (cột [12]),
+            # ct12 là TNCT giảm thuế KKT (cột [13]), ct13 là TNCT miễn Hiệp định (cột [14]),
+            # ct14 là Số lượng NPT (cột [16]), ct15..ct24 tương ứng cột [17]..[26]!
+            col_candidates: List[Tuple[str, Sequence[str]]] = [
+                ("stt", ("stt",)),
+                ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                ("mst", ("ct08", "mst", "08")),
+                ("loaiGiayTo", ("ct09a_ten", "loaiGiayTo")),
+                ("soCMT", ("ct09", "soCMT", "09")),
+                ("caNhanUyQuyen", ("ct10", "caNhanUyQuyen", "10")),
+                ("caNhanNuocNgoai", ("caNhanNNUQQT", "caNhanNuocNgoai")),
+                ("tongTNCT", ("ct11", "tongTNCT", "11")),
+                ("tnctTaiToChuc", ("ct12", "tnctTaiToChuc", "12")),
+                ("tnctMienHiepDinh", ("ct13", "tnctMienHiepDinh", "13")),
+                ("tnctMienDauKhi", ("tnctMienDauKhi",)),
+                ("soLuongNPT", ("ct14", "soLuongNPT", "14")),
+                ("tongGiamTruGiaCanh", ("ct15", "tongGiamTruGiaCanh", "15")),
+                ("tuThien", ("ct16", "tuThien", "16")),
+                ("baoHiem", ("ct17", "baoHiem", "17")),
+                ("huuTri", ("ct18", "huuTri", "18")),
+                ("tntt", ("ct19", "tntt", "19")),
+                ("thueDaKhauTru", ("ct20", "thueDaKhauTru", "20")),
+                ("thueDaKhauTruTaiToChuc", ("ct21", "thueDaKhauTruTaiToChuc", "21")),
+                ("tongThuePhaiNop", ("ct22", "tongThuePhaiNop", "22")),
+                ("thueNopThua", ("ct23", "thueNopThua", "23")),
+                ("thueConPhaiNop", ("ct24", "thueConPhaiNop", "24")),
+                ("caNhanMienDuoi50k", ("caNhanMienDuoi50k",)),
+            ]
+        else:
+            col_candidates = [
+                ("stt", ("stt",)),
+                ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                ("mst", ("ct08", "mst", "08")),
+                ("loaiGiayTo", ("ct09a_ten", "loaiGiayTo")),
+                ("soCMT", ("ct09", "soCMT", "09")),
+                ("caNhanUyQuyen", ("ct10", "caNhanUyQuyen", "10")),
+                ("caNhanNuocNgoai", ("ct11", "caNhanNuocNgoai", "11")),
+                ("tongTNCT", ("ct12", "tongTNCT", "12")),
+                ("tnctTaiToChuc", ("ct13", "tnctTaiToChuc", "13")),
+                ("tnctMienHiepDinh", ("ct14", "tnctMienHiepDinh", "14")),
+                ("tnctMienDauKhi", ("ct15", "tnctMienDauKhi", "15")),
+                ("soLuongNPT", ("ct16", "soLuongNPT", "16")),
+                ("tongGiamTruGiaCanh", ("ct17", "tongGiamTruGiaCanh", "17")),
+                ("tuThien", ("ct18", "tuThien", "18")),
+                ("baoHiem", ("ct19", "baoHiem", "19")),
+                ("huuTri", ("ct20", "huuTri", "20")),
+                ("tntt", ("ct21", "tntt", "21")),
+                ("thueDaKhauTru", ("ct22", "thueDaKhauTru", "22")),
+                ("thueDaKhauTruTaiToChuc", ("ct23", "thueDaKhauTruTaiToChuc", "23")),
+                ("tongThuePhaiNop", ("ct24", "tongThuePhaiNop", "24")),
+                ("thueNopThua", ("ct25", "thueNopThua", "25")),
+                ("thueConPhaiNop", ("ct26", "thueConPhaiNop", "26")),
+                ("caNhanMienDuoi50k", ("ct27", "caNhanMienDuoi50k", "27")),
+            ]
+    elif sheet_type == "05-2":
+        col_candidates = [
+            ("stt", ("stt",)),
+            ("hoVaTen", ("ct07", "hoVaTen", "07")),
+            ("mst", ("ct08", "mst", "08")),
+            ("loaiGiayTo", ("ct09a_ten", "loaiGiayTo")),
+            ("soCMT", ("ct09", "soCMT", "09")),
+            ("caNhanKhongCuTru", ("ct10", "caNhanKhongCuTru", "10")),
+            ("tongTNCT", ("ct11", "tongTNCT", "11")),
+            ("tnctBaoHiem", ("ct12", "tnctBaoHiem", "12")),
+            ("tnctMienHiepDinh", ("ct13", "tnctMienHiepDinh", "13")),
+            ("tnctMienDauKhi", ("ct14", "tnctMienDauKhi", "14")),
+            ("thueDaKhauTru", ("ct15", "thueDaKhauTru", "15")),
+            ("thueBaoHiem", ("ct16", "thueBaoHiem", "16")),
+        ]
+    else:  # 05-3
+        if is_tt156:
+            # Trong TT156/92 (maTKhai=395): ct12_ten là Quốc tịch, ct13 là CMND/Hộ chiếu,
+            # ct14_ten là Quan hệ với NNT, ct15/ct16 là Quyển số/Số GKS, còn ct21 là Từ tháng, ct22 là Đến tháng!
+            col_candidates = [
+                ("stt", ("stt",)),
+                ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                ("mst", ("ct08", "mst", "08")),
+                ("hoVaTenNPT", ("ct09", "hoVaTenNPT", "09")),
+                ("ngaySinhNPT", ("ct10", "ngaySinhNPT", "10")),
+                ("mstNPT", ("ct11", "mstNPT", "11")),
+                ("loaiGiayTo", ("loaiGiayTo", "ct12_ten", "ct12")),
+                ("soGiayTo", ("ct13", "soGiayTo", "13")),
+                ("quanHe", ("ct14_ten", "quanHe", "ct14", "14")),
+                ("tuThang", ("ct21", "tuThang", "ct15", "15")),
+                ("denThang", ("ct22", "denThang", "ct16", "16")),
+            ]
+        else:
+            col_candidates = [
+                ("stt", ("stt",)),
+                ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                ("mst", ("ct08", "mst", "08")),
+                ("hoVaTenNPT", ("ct09", "hoVaTenNPT", "09")),
+                ("ngaySinhNPT", ("ct10", "ngaySinhNPT", "10")),
+                ("mstNPT", ("ct11", "mstNPT", "11")),
+                ("loaiGiayTo", ("ct12_ten", "loaiGiayTo", "ct12", "12")),
+                ("soGiayTo", ("ct13", "soGiayTo", "13")),
+                ("quanHe", ("ct14_ten", "quanHe", "ct14", "14")),
+                ("tuThang", ("ct15", "tuThang", "15")),
+                ("denThang", ("ct16", "denThang", "16")),
+            ]
+
+    checkbox_fields = {"caNhanUyQuyen", "caNhanNuocNgoai", "caNhanKhongCuTru", "caNhanMienDuoi50k"}
+    center_fields = checkbox_fields | {"stt", "quanHe", "tuThang", "denThang"}
+
+    cur_row = 4
+    for idx, r in enumerate(rows, start=1):
+        # Phát hiện tự động dòng thuộc cấu trúc TT156 nếu có ct21/ct22 dạng tháng ở 05-3 hoặc caNhanNNUQQT ở 05-1
+        row_is_156 = is_tt156 or ("caNhanNNUQQT" in r) or (sheet_type == "05-3" and ("ct21" in r or "ct22" in r))
+
+        for col_idx, (field_name, cand_keys) in enumerate(col_candidates, start=1):
+            if field_name == "stt":
+                val: Any = idx
+            else:
+                val = _first_not_none(r, cand_keys)
+
+                # Xử lý thông minh cho 05-3 TT156 khi NPT là trẻ em khai theo Giấy khai sinh (ct13 trống nhưng có ct15/ct16)
+                if sheet_type == "05-3" and row_is_156:
+                    if field_name == "soGiayTo" and (val is None or str(val).strip() == ""):
+                        q_so = _first_not_none(r, ("ct15",))
+                        s_gks = _first_not_none(r, ("ct16",))
+                        if q_so is not None and s_gks is not None:
+                            val = f"QS: {q_so} - Số: {s_gks}"
+                        elif q_so is not None:
+                            val = str(q_so)
+                        elif s_gks is not None:
+                            val = str(s_gks)
+                    elif field_name == "loaiGiayTo":
+                        has_cmnd = _first_not_none(r, ("ct13",)) not in (None, "")
+                        has_gks = _first_not_none(r, ("ct15", "ct16")) not in (None, "")
+                        if not has_cmnd and has_gks:
+                            val = "Giấy khai sinh"
+
+            if field_name in checkbox_fields:
+                val = "[x]" if val in (1, "1", True, "true", "True", "[x]") else "[]"
+
+            is_mst_col = any(x in field_name.lower() for x in ("mst", "socmt", "sogiayto", "cccd"))
+            cell = ws.cell(cur_row, col_idx)
+            write_cell_formatted(cell, val, is_mst=is_mst_col)
+            if field_name in center_fields:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        cur_row += 1
+
+    if sheet_type in ("05-1", "05-2"):
+        sum_row = cur_row
+        ws.cell(sum_row, 1, "Tổng").font = BOLD_FONT
+        ws.cell(sum_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+        merge_range = f"A{sum_row}:G{sum_row}" if sheet_type == "05-1" else f"A{sum_row}:F{sum_row}"
+        ws.merge_cells(merge_range)
+
+        start_col = 8 if sheet_type == "05-1" else 7
+        for c in range(1, len(cols_def) + 1):
+            cell = ws.cell(sum_row, c)
+            cell.font = BOLD_FONT
+            cell.border = THIN_BORDER
+            if c >= start_col and c != (23 if sheet_type == "05-1" else 99):
+                cl = get_column_letter(c)
+                if len(rows) > 0:
+                    cell.value = f"=SUM({cl}4:{cl}{sum_row-1})"
+                    cell.number_format = "#,##0"
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                else:
+                    cell.value = 0
+
+    total_cols = len(cols_def)
+    for c in range(1, total_cols + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 14
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 24
+    ws.column_dimensions["C"].width = 16
+    ws.freeze_panes = "A4"
+
+
+def write_single_year_tncn_file(
+    output_filepath: str,
+    decl: TaxDeclaration,
+) -> None:
+    """Tạo 1 file Excel riêng cho quyết toán TNCN của 1 năm với đúng 4 sheet: TK, 05-1, 05-2, 05-3."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+
+    is_tt156 = _is_tt156_decl(decl)
+
+    # 1. Sheet 'TK'
+    ws_tk = wb.create_sheet(title="TK")
+    write_sheet_tncn_tk(ws_tk, decl)
+
+    # Lấy các bảng kê từ XML
+    rows_05_1: List[Dict[str, Any]] = []
+    rows_05_2: List[Dict[str, Any]] = []
+    rows_05_3: List[Dict[str, Any]] = []
+    for pl_name, rows in decl.appendices.items():
+        pl_upper = pl_name.upper()
+        if "05_1" in pl_upper or "05-1" in pl_upper or "051" in pl_upper:
+            rows_05_1.extend(rows)
+        elif "05_2" in pl_upper or "05-2" in pl_upper or "052" in pl_upper:
+            rows_05_2.extend(rows)
+        elif "05_3" in pl_upper or "05-3" in pl_upper or "053" in pl_upper:
+            rows_05_3.extend(rows)
+
+    # 2. Sheet '05-1'
+    ws_05_1 = wb.create_sheet(title="05-1")
+    write_sheet_tncn_pl(ws_05_1, COLS_05_1, MERGES_05_1, rows_05_1, "05-1", is_tt156=is_tt156)
+
+    # 3. Sheet '05-2'
+    ws_05_2 = wb.create_sheet(title="05-2")
+    write_sheet_tncn_pl(ws_05_2, COLS_05_2, MERGES_05_2, rows_05_2, "05-2", is_tt156=is_tt156)
+
+    # 4. Sheet '05-3'
+    ws_05_3 = wb.create_sheet(title="05-3")
+    write_sheet_tncn_pl(ws_05_3, COLS_05_3, MERGES_05_3, rows_05_3, "05-3", is_tt156=is_tt156)
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_filepath)), exist_ok=True)
+    wb.save(output_filepath)
+
+
+def write_consolidated_tncn_appendices(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+) -> None:
+    """
+    Xuất 3 sheet phụ lục quyết toán TNCN chuẩn mẫu ('05-1', '05-2', '05-3') vào file Excel tổng hợp:
+    - Nếu chỉ có 1 năm: Xuất đúng bảng chuẩn 1 năm.
+    - Nếu có nhiều năm (VD: 2019..2024): Giữ nguyên cấu trúc cột chuẩn của mẫu (23 cột cho 05-1,
+      12 cột cho 05-2, 11 cột cho 05-3), phân tách từng năm bằng dòng tiêu đề NĂM và dòng
+      Tổng cộng năm {NĂM} kèm dòng TỔNG CỘNG TẤT CẢ CÁC NĂM ở cuối bảng.
+    """
+    sorted_decls = sorted(declarations, key=lambda d: (d.year or 0, d.tu_ngay or datetime.date.min))
+    if not sorted_decls:
+        return
+
+    if len(sorted_decls) == 1:
+        d = sorted_decls[0]
+        is_tt156 = _is_tt156_decl(d)
+        r_051: List[Dict[str, Any]] = []
+        r_052: List[Dict[str, Any]] = []
+        r_053: List[Dict[str, Any]] = []
+        for pl_name, rows in d.appendices.items():
+            pl_u = pl_name.upper()
+            if "05_1" in pl_u or "05-1" in pl_u or "051" in pl_u:
+                r_051.extend(rows)
+            elif "05_2" in pl_u or "05-2" in pl_u or "052" in pl_u:
+                r_052.extend(rows)
+            elif "05_3" in pl_u or "05-3" in pl_u or "053" in pl_u:
+                r_053.extend(rows)
+        for s_type, cols_def, merges_def, r_list in (
+            ("05-1", COLS_05_1, MERGES_05_1, r_051),
+            ("05-2", COLS_05_2, MERGES_05_2, r_052),
+            ("05-3", COLS_05_3, MERGES_05_3, r_053),
+        ):
+            if r_list:
+                sname = sanitize_sheet_name(s_type, existing_sheets)
+                ws = wb.create_sheet(title=sname)
+                write_sheet_tncn_pl(ws, cols_def, merges_def, r_list, s_type, is_tt156=is_tt156)
+        return
+
+    # Trường hợp nhiều năm: gom từng loại phụ lục 05-1, 05-2, 05-3 theo từng năm
+    for sheet_type, cols_def, merges_def in (
+        ("05-1", COLS_05_1, MERGES_05_1),
+        ("05-2", COLS_05_2, MERGES_05_2),
+        ("05-3", COLS_05_3, MERGES_05_3),
+    ):
+        year_blocks: List[Tuple[TaxDeclaration, List[Dict[str, Any]]]] = []
+        for d in sorted_decls:
+            matched_rows: List[Dict[str, Any]] = []
+            for pl_name, rows in d.appendices.items():
+                pl_u = pl_name.upper()
+                if sheet_type == "05-1" and ("05_1" in pl_u or "05-1" in pl_u or "051" in pl_u):
+                    matched_rows.extend(rows)
+                elif sheet_type == "05-2" and ("05_2" in pl_u or "05-2" in pl_u or "052" in pl_u):
+                    matched_rows.extend(rows)
+                elif sheet_type == "05-3" and ("05_3" in pl_u or "05-3" in pl_u or "053" in pl_u):
+                    matched_rows.extend(rows)
+            if matched_rows:
+                year_blocks.append((d, matched_rows))
+
+        if not year_blocks:
+            continue
+
+        sname = sanitize_sheet_name(sheet_type, existing_sheets)
+        ws = wb.create_sheet(title=sname)
+
+        # Ghi 3 dòng tiêu đề chuẩn của mẫu 05-1 / 05-2 / 05-3
+        ws.row_dimensions[1].height = 36
+        ws.row_dimensions[2].height = 48
+        ws.row_dimensions[3].height = 20
+        for col_idx, (r1, r2, r3) in enumerate(cols_def, start=1):
+            ws.cell(1, col_idx, r1)
+            ws.cell(2, col_idx, r2)
+            ws.cell(3, col_idx, r3)
+        for m_range in merges_def:
+            ws.merge_cells(m_range)
+        for r in range(1, 4):
+            for c in range(1, len(cols_def) + 1):
+                cell = ws.cell(r, c)
+                cell.font = BOLD_FONT
+                cell.fill = GRAY_HEADER_FILL
+                cell.border = THIN_BORDER
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        checkbox_fields = {"caNhanUyQuyen", "caNhanNuocNgoai", "caNhanKhongCuTru", "caNhanMienDuoi50k"}
+        center_fields = checkbox_fields | {"stt", "quanHe", "tuThang", "denThang"}
+
+        cur_row = 4
+        year_sum_rows: List[int] = []
+        total_cols = len(cols_def)
+
+        for d, rows in year_blocks:
+            is_tt156 = _is_tt156_decl(d)
+            yr_label = d.year or d.ky_kkhai
+
+            # Dòng banner phân tách từng năm
+            ws.row_dimensions[cur_row].height = 22
+            banner_text = (
+                f"NĂM {yr_label} — Mã tờ khai: {d.ma_tkhai} | Lần kê khai: {d.so_lan or '0'} | "
+                f"Số dòng: {len(rows)} | File: {d.file_name}"
+            )
+            ws.cell(cur_row, 1, banner_text)
+            ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=total_cols)
+            for c_i in range(1, total_cols + 1):
+                bc = ws.cell(cur_row, c_i)
+                bc.font = BOLD_FONT
+                bc.fill = SECTION_FILL
+                bc.border = THIN_BORDER
+                if c_i == 1:
+                    bc.alignment = Alignment(horizontal="left", vertical="center")
+            cur_row += 1
+
+            # Xác định ánh xạ cột theo đúng Thông tư 156/92 hoặc Thông tư 80 của năm đó
+            if sheet_type == "05-1":
+                if is_tt156:
+                    col_candidates = [
+                        ("stt", ("stt",)),
+                        ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                        ("mst", ("ct08", "mst", "08")),
+                        ("loaiGiayTo", ("ct09a_ten", "loaiGiayTo")),
+                        ("soCMT", ("ct09", "soCMT", "09")),
+                        ("caNhanUyQuyen", ("ct10", "caNhanUyQuyen", "10")),
+                        ("caNhanNuocNgoai", ("caNhanNNUQQT", "caNhanNuocNgoai")),
+                        ("tongTNCT", ("ct11", "tongTNCT", "11")),
+                        ("tnctTaiToChuc", ("ct12", "tnctTaiToChuc", "12")),
+                        ("tnctMienHiepDinh", ("ct13", "tnctMienHiepDinh", "13")),
+                        ("tnctMienDauKhi", ("ct14", "tnctMienDauKhi", "14")),
+                        ("soLuongNPT", ("ct15", "soLuongNPT", "15")),
+                        ("tongGiamTruGiaCanh", ("ct16", "tongGiamTruGiaCanh", "16")),
+                        ("tuThien", ("ct17", "tuThien", "17")),
+                        ("baoHiem", ("ct18", "baoHiem", "18")),
+                        ("huuTri", ("ct19", "huuTri", "19")),
+                        ("tntt", ("ct20", "tntt", "20")),
+                        ("thueDaKhauTru", ("ct21", "thueDaKhauTru", "21")),
+                        ("thueDaKhauTruTaiToChuc", ("ct22", "thueDaKhauTruTaiToChuc", "22")),
+                        ("tongThuePhaiNop", ("ct23", "tongThuePhaiNop", "23")),
+                        ("thueNopThua", ("ct24", "thueNopThua", "24")),
+                        ("thueConPhaiNop", ("ct25", "thueConPhaiNop", "25")),
+                        ("caNhanMienDuoi50k", ("ct27", "caNhanMienDuoi50k")),
+                    ]
+                else:
+                    col_candidates = [
+                        ("stt", ("stt",)),
+                        ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                        ("mst", ("ct08", "mst", "08")),
+                        ("loaiGiayTo", ("ct09a_ten", "loaiGiayTo")),
+                        ("soCMT", ("ct09", "soCMT", "09")),
+                        ("caNhanUyQuyen", ("ct10", "caNhanUyQuyen", "10")),
+                        ("caNhanNuocNgoai", ("ct11", "caNhanNuocNgoai", "11")),
+                        ("tongTNCT", ("ct12", "tongTNCT", "12")),
+                        ("tnctTaiToChuc", ("ct13", "tnctTaiToChuc", "13")),
+                        ("tnctMienHiepDinh", ("ct14", "tnctMienHiepDinh", "14")),
+                        ("tnctMienDauKhi", ("ct15", "tnctMienDauKhi", "15")),
+                        ("soLuongNPT", ("ct16", "soLuongNPT", "16")),
+                        ("tongGiamTruGiaCanh", ("ct17", "tongGiamTruGiaCanh", "17")),
+                        ("tuThien", ("ct18", "tuThien", "18")),
+                        ("baoHiem", ("ct19", "baoHiem", "19")),
+                        ("huuTri", ("ct20", "huuTri", "20")),
+                        ("tntt", ("ct21", "tntt", "21")),
+                        ("thueDaKhauTru", ("ct22", "thueDaKhauTru", "22")),
+                        ("thueDaKhauTruTaiToChuc", ("ct23", "thueDaKhauTruTaiToChuc", "23")),
+                        ("tongThuePhaiNop", ("ct24", "tongThuePhaiNop", "24")),
+                        ("thueNopThua", ("ct25", "thueNopThua", "25")),
+                        ("thueConPhaiNop", ("ct26", "thueConPhaiNop", "26")),
+                        ("caNhanMienDuoi50k", ("ct27", "caNhanMienDuoi50k", "27")),
+                    ]
+            elif sheet_type == "05-2":
+                col_candidates = [
+                    ("stt", ("stt",)),
+                    ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                    ("mst", ("ct08", "mst", "08")),
+                    ("loaiGiayTo", ("ct09a_ten", "loaiGiayTo")),
+                    ("soCMT", ("ct09", "soCMT", "09")),
+                    ("caNhanKhongCuTru", ("ct10", "caNhanKhongCuTru", "10")),
+                    ("tongTNCT", ("ct11", "tongTNCT", "11")),
+                    ("tnctBaoHiem", ("ct12", "tnctBaoHiem", "12")),
+                    ("tnctMienHiepDinh", ("ct13", "tnctMienHiepDinh", "13")),
+                    ("tnctMienDauKhi", ("ct14", "tnctMienDauKhi", "14")),
+                    ("thueDaKhauTru", ("ct15", "thueDaKhauTru", "15")),
+                    ("thueBaoHiem", ("ct16", "thueBaoHiem", "16")),
+                ]
+            else:  # 05-3
+                if is_tt156:
+                    col_candidates = [
+                        ("stt", ("stt",)),
+                        ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                        ("mst", ("ct08", "mst", "08")),
+                        ("hoVaTenNPT", ("ct09", "hoVaTenNPT", "09")),
+                        ("ngaySinhNPT", ("ct10", "ngaySinhNPT", "10")),
+                        ("mstNPT", ("ct11", "mstNPT", "11")),
+                        ("loaiGiayTo", ("loaiGiayTo", "ct12_ten", "ct12")),
+                        ("soGiayTo", ("ct13", "soGiayTo", "13")),
+                        ("quanHe", ("ct14_ten", "quanHe", "ct14", "14")),
+                        ("tuThang", ("ct21", "tuThang", "ct15", "15")),
+                        ("denThang", ("ct22", "denThang", "ct16", "16")),
+                    ]
+                else:
+                    col_candidates = [
+                        ("stt", ("stt",)),
+                        ("hoVaTen", ("ct07", "hoVaTen", "07")),
+                        ("mst", ("ct08", "mst", "08")),
+                        ("hoVaTenNPT", ("ct09", "hoVaTenNPT", "09")),
+                        ("ngaySinhNPT", ("ct10", "ngaySinhNPT", "10")),
+                        ("mstNPT", ("ct11", "mstNPT", "11")),
+                        ("loaiGiayTo", ("ct12_ten", "loaiGiayTo", "ct12", "12")),
+                        ("soGiayTo", ("ct13", "soGiayTo", "13")),
+                        ("quanHe", ("ct14_ten", "quanHe", "ct14", "14")),
+                        ("tuThang", ("ct15", "tuThang", "15")),
+                        ("denThang", ("ct16", "denThang", "16")),
+                    ]
+
+            yr_start = cur_row
+            for idx, r in enumerate(rows, start=1):
+                row_is_156 = is_tt156 or ("caNhanNNUQQT" in r) or (sheet_type == "05-3" and ("ct21" in r or "ct22" in r))
+                for col_idx, (field_name, cand_keys) in enumerate(col_candidates, start=1):
+                    if field_name == "stt":
+                        val: Any = idx
+                    else:
+                        val = _first_not_none(r, cand_keys)
+                        if sheet_type == "05-3" and row_is_156:
+                            if field_name == "soGiayTo" and (val is None or str(val).strip() == ""):
+                                q_so = _first_not_none(r, ("ct15",))
+                                s_gks = _first_not_none(r, ("ct16",))
+                                if q_so is not None and s_gks is not None:
+                                    val = f"QS: {q_so} - Số: {s_gks}"
+                                elif q_so is not None:
+                                    val = str(q_so)
+                                elif s_gks is not None:
+                                    val = str(s_gks)
+                            elif field_name == "loaiGiayTo":
+                                has_cmnd = _first_not_none(r, ("ct13",)) not in (None, "")
+                                has_gks = _first_not_none(r, ("ct15", "ct16")) not in (None, "")
+                                if not has_cmnd and has_gks:
+                                    val = "Giấy khai sinh"
+
+                    if field_name in checkbox_fields:
+                        val = "[x]" if val in (1, "1", True, "true", "True", "[x]") else "[]"
+
+                    is_mst_col = any(x in field_name.lower() for x in ("mst", "socmt", "sogiayto", "cccd"))
+                    cell = ws.cell(cur_row, col_idx)
+                    write_cell_formatted(cell, val, is_mst=is_mst_col)
+                    if field_name in center_fields:
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                cur_row += 1
+
+            yr_end = cur_row - 1
+            if sheet_type in ("05-1", "05-2"):
+                sum_row = cur_row
+                year_sum_rows.append(sum_row)
+                ws.row_dimensions[sum_row].height = 22
+                ws.cell(sum_row, 1, f"Tổng cộng năm {yr_label}").font = BOLD_FONT
+                ws.cell(sum_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+                merge_end_col = 7 if sheet_type == "05-1" else 6
+                ws.merge_cells(start_row=sum_row, start_column=1, end_row=sum_row, end_column=merge_end_col)
+
+                start_col = 8 if sheet_type == "05-1" else 7
+                for c in range(1, total_cols + 1):
+                    cell = ws.cell(sum_row, c)
+                    cell.font = BOLD_FONT
+                    cell.fill = SECTION_FILL
+                    cell.border = THIN_BORDER
+                    if c >= start_col and c != (23 if sheet_type == "05-1" else 99):
+                        cl = get_column_letter(c)
+                        cell.value = f"=SUM({cl}{yr_start}:{cl}{yr_end})"
+                        cell.number_format = "#,##0"
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                cur_row += 1
+
+        if sheet_type in ("05-1", "05-2") and len(year_sum_rows) > 1:
+            grand_row = cur_row
+            ws.row_dimensions[grand_row].height = 24
+            ws.cell(grand_row, 1, "TỔNG CỘNG TẤT CẢ CÁC NĂM").font = BOLD_FONT
+            ws.cell(grand_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+            merge_end_col = 7 if sheet_type == "05-1" else 6
+            ws.merge_cells(start_row=grand_row, start_column=1, end_row=grand_row, end_column=merge_end_col)
+
+            start_col = 8 if sheet_type == "05-1" else 7
+            for c in range(1, total_cols + 1):
+                cell = ws.cell(grand_row, c)
+                cell.font = BOLD_FONT
+                cell.fill = GRAY_HEADER_FILL
+                cell.border = THIN_BORDER
+                if c >= start_col and c != (23 if sheet_type == "05-1" else 99):
+                    cl = get_column_letter(c)
+                    sum_expr = "+".join(f"{cl}{r}" for r in year_sum_rows)
+                    cell.value = f"={sum_expr}"
+                    cell.number_format = "#,##0"
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+
+        for c in range(1, total_cols + 1):
+            ws.column_dimensions[get_column_letter(c)].width = 15
+        ws.column_dimensions["A"].width = 6
+        ws.column_dimensions["B"].width = 24
+        ws.column_dimensions["C"].width = 16
+        ws.freeze_panes = "A4"
+
+
+# ==============================================================================
+# 5. CÁC SHEET GTGT: 'So Thue GTGT TH' (Toàn bộ tờ khai) & 'So Thue GTGT Cuoi' (Chốt theo năm)
+# ==============================================================================
+GTGT_COLS_SPEC = [
+    ("STT", "#", 6),
+    ("Mã CQT phát sinh", "(A)", 10),
+    ("Tên CQT phát sinh", "(B)", 26),
+    ("Tên CQT cấp Cục", "(C)", 26),
+    ("Tên NNT", "(E)", 30),
+    ("Trạng thái hoạt động", "(F)", 8),
+    ("Kỳ tính thuế", "(K)", 10),
+    ("Lần kê khai", "(M)", 10),
+    ("Ngày ghi sổ", "(N)", 12),
+    ("Ngày nộp tờ khai", "(O)", 12),
+    ("Tiểu mục", "(1)", 10),
+    ("Thuế GTGT còn được khấu trừ kỳ trước chuyển sang (22)", "(2)", 18),
+    ("Giá trị HHDV mua vào trong kỳ (23)", "(3)", 18),
+    ("Thuế GTGT HHDV mua vào trong kỳ (24)", "(4)", 18),
+    ("Giá trị HHDV mua vào nhập khẩu (23a)", "(5)", 18),
+    ("Thuế GTGT HHDV mua vào nhập khẩu (24a)", "(6)", 18),
+    ("Thuế đầu vào được khấu trừ (25)", "(7)", 18),
+    ("Doanh thu HHDV bán ra không chịu thuế GTGT (26)", "(8)", 18),
+    ("Doanh thu HHDV bán ra chịu thuế GTGT (27)", "(9)", 18),
+    ("Thuế của HHDV bán ra chịu thuế GTGT (28)", "(10)", 18),
+    ("Doanh thu HHDV thuế suất 0% (29)", "(11)", 18),
+    ("Doanh thu HHDV thuế suất 5% (30)", "(12)", 18),
+    ("Thuế của HHDV thuế suất 5% (31)", "(13)", 18),
+    ("Doanh thu HHDV thuế suất 10% (32)", "(14)", 18),
+    ("Thuế của HHDV thuế suất 10% (33)", "(15)", 18),
+    ("Doanh thu HHDV không tính thuế (32a)", "(16)", 18),
+    ("Tổng doanh thu (34)", "(17)", 18),
+    ("Thuế đầu ra (35)", "(18)", 18),
+    ("Thuế GTGT phát sinh trong kỳ (36)", "(19)", 18),
+    ("Điều chỉnh giảm thuế GTGT các kỳ trước (37)", "(20)", 18),
+    ("Điều chỉnh tăng thuế GTGT các kỳ trước (38)", "(21)", 18),
+    ("Thuế GTGT đã nộp ở địa phương khác của HĐKD xây dựng, lắp đặt, bán hàng, bất động sản ngoại tỉnh (39)", "(22)", 18),
+    ("Thuế GTGT nhận bàn giao được khấu trừ trong kỳ (39a)", "(23)", 18),
+    ("Thuế GTGT phải nộp của HĐ SXKD trong kỳ (40a)", "(24)", 18),
+    ("Thuế GTGT bù trừ với dự án đầu tư (40b)", "(25)", 18),
+    ("Thuế GTGT còn phải nộp (40)", "(26)", 18),
+    ("Thuế GTGT chưa khấu trừ hết (41)", "(27)", 18),
+    ("Thuế GTGT đề nghị hoàn (42)", "(28)", 18),
+    ("Thuế GTGT khấu trừ chuyển kỳ sau (43)", "(29)", 18),
+]
+
+GTGT_INDICATOR_MAP = {
+    12: ("ct22", "22"),
+    13: ("ct23", "23"),
+    14: ("ct24", "24"),
+    15: ("ct23a", "23a"),
+    16: ("ct24a", "24a"),
+    17: ("ct25", "25"),
+    18: ("ct26", "26"),
+    19: ("ct27", "27"),
+    20: ("ct28", "28"),
+    21: ("ct29", "29"),
+    22: ("ct30", "30"),
+    23: ("ct31", "31"),
+    24: ("ct32", "32"),
+    25: ("ct33", "33"),
+    26: ("ct32a", "32a"),
+    27: ("ct34", "34"),
+    28: ("ct35", "35"),
+    29: ("ct36", "36"),
+    30: ("ct37", "37"),
+    31: ("ct38", "38"),
+    32: ("ct39", "39"),
+    33: ("ct39a", "39a"),
+    34: ("ct40a", "40a"),
+    35: ("ct40b", "40b"),
+    36: ("ct40", "40"),
+    37: ("ct41", "41"),
+    38: ("ct42", "42"),
+    39: ("ct43", "43"),
+}
+
+
+def write_gtgt_timeline_sheet(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+    sheet_name: str = "So Thue GTGT TH",
+) -> None:
+    """Sheet 'So Thue GTGT TH': Tất cả các tờ khai GTGT (lần đầu + các lần bổ sung theo dòng thời gian)."""
+    sname = sanitize_sheet_name(sheet_name, existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    ws.append([c[0] for c in GTGT_COLS_SPEC])
+    ws.append([c[1] for c in GTGT_COLS_SPEC])
+
+    for r in (1, 2):
+        ws.row_dimensions[r].height = 26
+        for c in range(1, len(GTGT_COLS_SPEC) + 1):
+            cell = ws.cell(r, c)
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = THIN_BORDER
+
+    def gtgt_sort_key(d: TaxDeclaration):
+        y = d.year or 0
+        tu = d.tu_ngay or datetime.date.min
+        try:
+            lan = int(d.so_lan) if d.so_lan else 0
+        except ValueError:
+            lan = 0
+        nlap = d.ngay_lap or datetime.date.min
+        return (d.mst or "", y, tu, lan, nlap)
+
+    unique_gtgt = deduplicate_gtgt_declarations(declarations)
+    sorted_gtgt = sorted(unique_gtgt, key=gtgt_sort_key)
+
+    cur_row = 3
+    for idx, d in enumerate(sorted_gtgt, start=1):
+        try:
+            lan_num = int(d.so_lan) if d.so_lan else 0
+        except ValueError:
+            lan_num = 0
+
+        ky_str = d.ky_kkhai
+        if d.tu_ngay:
+            ky_str = f"{d.tu_ngay.strftime('%y%m')}"
+
+        write_cell_formatted(ws.cell(cur_row, 1), idx)
+        write_cell_formatted(ws.cell(cur_row, 2), d.ma_cqt or "", is_mst=True)
+        write_cell_formatted(ws.cell(cur_row, 3), d.ten_cqt)
+        write_cell_formatted(ws.cell(cur_row, 4), "")
+        write_cell_formatted(ws.cell(cur_row, 5), d.ten_nnt)
+        write_cell_formatted(ws.cell(cur_row, 6), "00", is_mst=True)
+        write_cell_formatted(ws.cell(cur_row, 7), ky_str, is_mst=True)
+        write_cell_formatted(ws.cell(cur_row, 8), lan_num)
+        write_cell_formatted(ws.cell(cur_row, 9), d.ngay_lap)
+        write_cell_formatted(ws.cell(cur_row, 10), d.ngay_lap)
+        write_cell_formatted(ws.cell(cur_row, 11), d.tieu_muc or "1701", is_mst=True)
+
+        for col_idx, (tag1, tag2) in GTGT_INDICATOR_MAP.items():
+            val = d.indicators.get(tag1)
+            if val is None:
+                val = d.indicators.get(tag2)
+            if val is None:
+                val = d.indicators.get(tag1.upper())
+            write_cell_formatted(ws.cell(cur_row, col_idx), val if val is not None else 0)
+
+        cur_row += 1
+
+    total_rows = cur_row - 1
+    total_cols = len(GTGT_COLS_SPEC)
+    for c_idx, spec in enumerate(GTGT_COLS_SPEC, start=1):
+        ws.column_dimensions[get_column_letter(c_idx)].width = spec[2]
+    ws.auto_filter.ref = f"A2:{get_column_letter(total_cols)}{total_rows}"
+    ws.freeze_panes = "H3"
+
+
+def write_gtgt_cuoi_sheet(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+    sheet_name: str = "So Thue GTGT Cuoi",
+) -> None:
+    """
+    Sheet 'So Thue GTGT Cuoi':
+    - Với mỗi kỳ kê khai thuế (tháng/quý), chỉ lấy tờ khai CUỐI CÙNG có hiệu lực (lần bổ sung cao nhất).
+    - Gom nhóm các kỳ theo từng NĂM.
+    - Cuối mỗi năm, có dòng TỔNG CỘNG NĂM {NĂM} dùng công thức =SUM(...) tính tổng số liệu cả năm.
+    - Dưới cùng có dòng TỔNG CỘNG TẤT CẢ CÁC NĂM.
+    """
+    sname = sanitize_sheet_name(sheet_name, existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    unique_gtgt = deduplicate_gtgt_declarations(declarations)
+
+    grouped_period: Dict[Tuple[str, str], List[TaxDeclaration]] = {}
+    for d in unique_gtgt:
+        mst = (d.mst or "").strip()
+        if d.tu_ngay:
+            ky_str = d.tu_ngay.strftime("%y%m")
+        else:
+            ky_str = (d.ky_kkhai or "").strip()
+        grouped_period.setdefault((mst, ky_str), []).append(d)
+
+    latest_per_period: List[TaxDeclaration] = []
+    for k, dlist in grouped_period.items():
+        def sort_key_p(item: TaxDeclaration):
+            try:
+                lan = int(item.so_lan) if item.so_lan is not None and str(item.so_lan).strip() != "" else 0
+            except (ValueError, TypeError):
+                lan = 0
+            nlap = item.ngay_lap or datetime.date.min
+            valid_inds = sum(1 for v in item.indicators.values() if v not in (None, 0, "", "0"))
+            return (lan, nlap, valid_inds, len(item.file_name), item.file_name)
+
+        dlist.sort(key=sort_key_p)
+        latest_per_period.append(dlist[-1])
+
+    grouped_by_year: Dict[int, List[TaxDeclaration]] = {}
+    for d in latest_per_period:
+        yr = d.year or 0
+        grouped_by_year.setdefault(yr, []).append(d)
+
+    ws.append([c[0] for c in GTGT_COLS_SPEC])
+    ws.append([c[1] for c in GTGT_COLS_SPEC])
+
+    for r in (1, 2):
+        ws.row_dimensions[r].height = 26
+        for c in range(1, len(GTGT_COLS_SPEC) + 1):
+            cell = ws.cell(r, c)
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = THIN_BORDER
+
+    cur_row = 3
+    global_idx = 1
+    year_sum_rows: List[int] = []
+
+    for yr in sorted(grouped_by_year.keys()):
+        decls_in_yr = grouped_by_year[yr]
+        decls_in_yr.sort(key=lambda d: d.tu_ngay or datetime.date.min)
+
+        yr_start = cur_row
+        for d in decls_in_yr:
+            try:
+                lan_num = int(d.so_lan) if d.so_lan is not None and str(d.so_lan).strip() != "" else 0
+            except (ValueError, TypeError):
+                lan_num = 0
+
+            ky_str = d.ky_kkhai
+            if d.tu_ngay:
+                ky_str = f"{d.tu_ngay.strftime('%y%m')}"
+
+            write_cell_formatted(ws.cell(cur_row, 1), global_idx)
+            write_cell_formatted(ws.cell(cur_row, 2), d.ma_cqt or "", is_mst=True)
+            write_cell_formatted(ws.cell(cur_row, 3), d.ten_cqt)
+            write_cell_formatted(ws.cell(cur_row, 4), "")
+            write_cell_formatted(ws.cell(cur_row, 5), d.ten_nnt)
+            write_cell_formatted(ws.cell(cur_row, 6), "00", is_mst=True)
+            write_cell_formatted(ws.cell(cur_row, 7), ky_str, is_mst=True)
+            write_cell_formatted(ws.cell(cur_row, 8), lan_num)
+            write_cell_formatted(ws.cell(cur_row, 9), d.ngay_lap)
+            write_cell_formatted(ws.cell(cur_row, 10), d.ngay_lap)
+            write_cell_formatted(ws.cell(cur_row, 11), d.tieu_muc or "1701", is_mst=True)
+
+            for col_idx, (tag1, tag2) in GTGT_INDICATOR_MAP.items():
+                val = d.indicators.get(tag1)
+                if val is None:
+                    val = d.indicators.get(tag2)
+                if val is None:
+                    val = d.indicators.get(tag1.upper())
+                write_cell_formatted(ws.cell(cur_row, col_idx), val if val is not None else 0)
+
+            cur_row += 1
+            global_idx += 1
+
+        yr_end = cur_row - 1
+
+        # DÒNG TỔNG CỘNG NĂM
+        sum_row = cur_row
+        year_sum_rows.append(sum_row)
+        ws.row_dimensions[sum_row].height = 24
+
+        for col_i in range(1, len(GTGT_COLS_SPEC) + 1):
+            cell = ws.cell(sum_row, col_i)
+            cell.font = BOLD_FONT
+            cell.fill = SECTION_FILL
+            cell.border = THIN_BORDER
+
+        ws.cell(sum_row, 5, f"Tổng cộng năm {yr}").alignment = Alignment(horizontal="left", vertical="center")
+        ws.cell(sum_row, 7, f"Tổng {yr}").alignment = Alignment(horizontal="center", vertical="center")
+
+        for col_idx in range(13, len(GTGT_COLS_SPEC) + 1):
+            col_letter = get_column_letter(col_idx)
+            cell = ws.cell(sum_row, col_idx)
+            cell.value = f"=SUM({col_letter}{yr_start}:{col_letter}{yr_end})"
+            cell.number_format = "#,##0"
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+
+        cur_row += 1
+
+    # DÒNG TỔNG CỘNG TẤT CẢ CÁC NĂM (GRAND TOTAL)
+    if len(year_sum_rows) > 1:
+        grand_row = cur_row
+        ws.row_dimensions[grand_row].height = 26
+        for col_i in range(1, len(GTGT_COLS_SPEC) + 1):
+            cell = ws.cell(grand_row, col_i)
+            cell.font = BOLD_FONT
+            cell.fill = GRAY_HEADER_FILL
+            cell.border = THIN_BORDER
+
+        ws.cell(grand_row, 5, "TỔNG CỘNG TẤT CẢ CÁC NĂM").alignment = Alignment(horizontal="left", vertical="center")
+        ws.cell(grand_row, 7, "TỔNG CỘNG").alignment = Alignment(horizontal="center", vertical="center")
+
+        for col_idx in range(13, len(GTGT_COLS_SPEC) + 1):
+            col_letter = get_column_letter(col_idx)
+            cell = ws.cell(grand_row, col_idx)
+            sum_terms = "+".join([f"{col_letter}{r}" for r in year_sum_rows])
+            cell.value = f"={sum_terms}"
+            cell.number_format = "#,##0"
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+
+        cur_row += 1
+
+    total_rows = cur_row - 1
+    total_cols = len(GTGT_COLS_SPEC)
+    for c_idx, spec in enumerate(GTGT_COLS_SPEC, start=1):
+        ws.column_dimensions[get_column_letter(c_idx)].width = spec[2]
+    ws.auto_filter.ref = f"A2:{get_column_letter(total_cols)}{total_rows}"
+    ws.freeze_panes = "H3"
+
+
+def write_sheet_chenh_lech_gtgt_tndn(
+    wb: openpyxl.Workbook,
+    existing_sheets: Set[str],
+    gtgt_sheet_name: str = "So Thue GTGT Cuoi",
+    kqkd_sheet_name: str = "BCHDKD",
+    sheet_name: str = "Chenh lech thue GTGT - TNDN",
+) -> Optional[str]:
+    """
+    Tạo sheet bảng so sánh giữa doanh thu tính thuế GTGT hàng năm (lấy từ sheet 'So Thue GTGT Cuoi')
+    và doanh thu tính thuế TNDN trên báo cáo hoạt động sản xuất kinh doanh ('BCHDKD').
+    Tự động dò tọa độ dòng của từng chỉ tiêu trên từng khối cột của 'BCHDKD' để không bao giờ lệch dòng.
+    """
+    actual_gtgt_sheet = None
+    for s in wb.sheetnames:
+        if s.strip().lower() == gtgt_sheet_name.strip().lower() or "so thue gtgt cuoi" in s.lower():
+            actual_gtgt_sheet = s
+            break
+
+    actual_kqkd_sheet = None
+    for s in wb.sheetnames:
+        if s.strip().lower() == kqkd_sheet_name.strip().lower() or "bchdkd" in s.lower():
+            actual_kqkd_sheet = s
+            break
+
+    gtgt_year_sum_rows: Dict[int, int] = {}
+    if actual_gtgt_sheet and actual_gtgt_sheet in wb.sheetnames:
+        ws_gt = wb[actual_gtgt_sheet]
+        for r in range(1, ws_gt.max_row + 1):
+            val_e = ws_gt.cell(r, 5).value
+            if val_e and "Tổng cộng năm" in str(val_e):
+                m = re.search(r"\b(19\d\d|20\d\d)\b", str(val_e))
+                if m:
+                    gtgt_year_sum_rows[int(m.group(0))] = r
+
+    # Dò tọa độ cột và tọa độ dòng thực tế cho từng năm trên sheet BCHDKD
+    kqkd_year_cols: Dict[int, str] = {}
+    kqkd_year_rows: Dict[int, Tuple[int, int, int]] = {}  # year -> (row_dt, row_giam_tru, row_tn_khac)
+    if actual_kqkd_sheet and actual_kqkd_sheet in wb.sheetnames:
+        ws_kq = wb[actual_kqkd_sheet]
+        # Tìm các cột "Mã chỉ tiêu" trong từng khối bảng trên BCHDKD
+        code_cols: List[int] = []
+        for c in range(1, ws_kq.max_column + 1):
+            if str(ws_kq.cell(2, c).value or "").strip() == "Mã chỉ tiêu":
+                code_cols.append(c)
+
+        for c in range(1, ws_kq.max_column + 1):
+            val_r1 = ws_kq.cell(1, c).value
+            if val_r1:
+                m = re.search(r"\b(19\d\d|20\d\d)\b", str(val_r1))
+                if m:
+                    yr_num = int(m.group(0))
+                    kqkd_year_cols[yr_num] = get_column_letter(c)
+                    # Tìm cột Mã chỉ tiêu gần nhất bên trái cột năm c
+                    left_code_cols = [cc for cc in code_cols if cc < c]
+                    cc = max(left_code_cols) if left_code_cols else 4
+                    # Xác định khối cột này thuộc TT156 (dòng 5 là [01]) hay TT80 (dòng 5 là [04])
+                    first_code = str(ws_kq.cell(5, cc).value or "").strip()
+                    if first_code == "[01]":
+                        dt_code, gt_code, tnk_code = "[01]", "[03]", "[16]"
+                    else:
+                        dt_code, gt_code, tnk_code = "[04]", "[06]", "[19]"
+                    r_dt, r_gt, r_tnk = 5, 7, 20
+                    for r_scan in range(5, ws_kq.max_row + 1):
+                        c_val = str(ws_kq.cell(r_scan, cc).value or "").strip()
+                        if c_val == dt_code:
+                            r_dt = r_scan
+                        elif c_val == gt_code:
+                            r_gt = r_scan
+                        elif c_val == tnk_code:
+                            r_tnk = r_scan
+                    kqkd_year_rows[yr_num] = (r_dt, r_gt, r_tnk)
+
+    all_years = sorted(set(gtgt_year_sum_rows.keys()) | set(kqkd_year_cols.keys()))
+    if not all_years:
+        return None
+
+    sname = sanitize_sheet_name(sheet_name, existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    r1_vals = [None, 1, 2, 3, None, 4, 5, "6=2-3", "7=6+4", "8=1-7"]
+    r2_vals = [
+        "Năm",
+        "DT tính thuế GTGT",
+        "DT tính thuế TNDN",
+        "Giảm trừ doanh thu",
+        "Chênh lệch chưa bao gồm thu nhập khác",
+        "Thu nhập khác",
+        "Chênh lệch",
+        "DT tính thuế TNDN-Giảm trừ doanh thu",
+        "(DT tính thuế TNDN-Giảm trừ doanh thu)+Thu nhập khác",
+        "Chênh lệch",
+    ]
+
+    ws.append(r1_vals)
+    ws.append(r2_vals)
+
+    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[2].height = 42
+
+    h_font = Font(name="Times New Roman", size=11, bold=True)
+    r1_font = Font(name="Times New Roman", size=11, bold=False)
+    body_font = Font(name="Times New Roman", size=11, bold=False)
+    bold_font = Font(name="Times New Roman", size=11, bold=True)
+
+    for c in range(1, 11):
+        c1 = ws.cell(1, c)
+        c1.font = r1_font
+        if c1.value is not None:
+            c1.alignment = Alignment(horizontal="center", vertical="center")
+
+        c2 = ws.cell(2, c)
+        c2.font = h_font
+        c2.border = THIN_BORDER
+        c2.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    cur_row = 3
+    for yr in all_years:
+        ws.row_dimensions[cur_row].height = 22
+        r_dt, r_gt, r_tnk = kqkd_year_rows.get(yr, (5, 7, 20))
+
+        # Cột A: Năm
+        cA = ws.cell(cur_row, 1, yr)
+        cA.font = body_font
+        cA.alignment = Alignment(horizontal="center", vertical="center")
+        cA.border = THIN_BORDER
+
+        # Cột B: DT tính thuế GTGT (1)
+        cB = ws.cell(cur_row, 2)
+        if yr in gtgt_year_sum_rows and actual_gtgt_sheet:
+            cB.value = f"='{actual_gtgt_sheet}'!AA{gtgt_year_sum_rows[yr]}"
+        else:
+            cB.value = 0
+        cB.font = body_font
+        cB.number_format = "#,##0"
+        cB.alignment = Alignment(horizontal="right", vertical="center")
+        cB.border = THIN_BORDER
+
+        # Cột C: DT tính thuế TNDN (2)
+        cC = ws.cell(cur_row, 3)
+        if yr in kqkd_year_cols and actual_kqkd_sheet:
+            cC.value = f"='{actual_kqkd_sheet}'!{kqkd_year_cols[yr]}{r_dt}"
+        else:
+            cC.value = 0
+        cC.font = body_font
+        cC.number_format = "#,##0"
+        cC.alignment = Alignment(horizontal="right", vertical="center")
+        cC.border = THIN_BORDER
+
+        # Cột D: Giảm trừ doanh thu (3)
+        cD = ws.cell(cur_row, 4)
+        if yr in kqkd_year_cols and actual_kqkd_sheet:
+            cD.value = f"='{actual_kqkd_sheet}'!{kqkd_year_cols[yr]}{r_gt}"
+        else:
+            cD.value = 0
+        cD.font = body_font
+        cD.number_format = "#,##0"
+        cD.alignment = Alignment(horizontal="right", vertical="center")
+        cD.border = THIN_BORDER
+
+        # Cột E: Chênh lệch chưa bao gồm thu nhập khác = B - C
+        cE = ws.cell(cur_row, 5, f"=B{cur_row}-C{cur_row}")
+        cE.font = body_font
+        cE.number_format = "#,##0"
+        cE.alignment = Alignment(horizontal="right", vertical="center")
+        cE.border = THIN_BORDER
+
+        # Cột F: Thu nhập khác (4)
+        cF = ws.cell(cur_row, 6)
+        if yr in kqkd_year_cols and actual_kqkd_sheet:
+            cF.value = f"='{actual_kqkd_sheet}'!{kqkd_year_cols[yr]}{r_tnk}"
+        else:
+            cF.value = 0
+        cF.font = body_font
+        cF.number_format = "#,##0"
+        cF.alignment = Alignment(horizontal="right", vertical="center")
+        cF.border = THIN_BORDER
+
+        # Cột G: Chênh lệch (5) = B - C - F + D
+        cG = ws.cell(cur_row, 7, f"=B{cur_row}-C{cur_row}-F{cur_row}+D{cur_row}")
+        cG.font = body_font
+        cG.number_format = "#,##0"
+        cG.alignment = Alignment(horizontal="right", vertical="center")
+        cG.border = THIN_BORDER
+
+        # Cột H: DT tính thuế TNDN-Giảm trừ doanh thu (6=2-3) = C - D
+        cH = ws.cell(cur_row, 8, f"=C{cur_row}-D{cur_row}")
+        cH.font = body_font
+        cH.number_format = "#,##0"
+        cH.alignment = Alignment(horizontal="right", vertical="center")
+        cH.border = THIN_BORDER
+
+        # Cột I: (DT tính thuế TNDN-Giảm trừ doanh thu)+Thu nhập khác (7=6+4) = H + F
+        cI = ws.cell(cur_row, 9, f"=H{cur_row}+F{cur_row}")
+        cI.font = body_font
+        cI.number_format = "#,##0"
+        cI.alignment = Alignment(horizontal="right", vertical="center")
+        cI.border = THIN_BORDER
+
+        # Cột J: Chênh lệch (8=1-7) = B - I
+        cJ = ws.cell(cur_row, 10, f"=B{cur_row}-I{cur_row}")
+        cJ.font = body_font
+        cJ.number_format = "#,##0"
+        cJ.alignment = Alignment(horizontal="right", vertical="center")
+        cJ.border = THIN_BORDER
+
+        cur_row += 1
+
+    # Dòng TỔNG CỘNG
+    sum_row = cur_row
+    ws.row_dimensions[sum_row].height = 24
+    c_tot = ws.cell(sum_row, 1, "Tổng cộng")
+    c_tot.font = bold_font
+    c_tot.alignment = Alignment(horizontal="center", vertical="center")
+    c_tot.border = THIN_BORDER
+
+    for col_idx in range(2, 11):
+        col_let = get_column_letter(col_idx)
+        c_sum = ws.cell(sum_row, col_idx, f"=SUM({col_let}3:{col_let}{sum_row - 1})")
+        c_sum.font = bold_font
+        c_sum.number_format = "#,##0"
+        c_sum.alignment = Alignment(horizontal="right", vertical="center")
+        c_sum.border = THIN_BORDER
+
+    col_widths = {
+        "A": 10,
+        "B": 24,
+        "C": 20,
+        "D": 22,
+        "E": 26,
+        "F": 18,
+        "G": 20,
+        "H": 24,
+        "I": 28,
+        "J": 20,
+    }
+    for col_let, w in col_widths.items():
+        ws.column_dimensions[col_let].width = w
+
+    return sname
+
+
+# ==============================================================================
+# 6. SHEET TỜ KHAI KHÁC (LỆ PHÍ MÔN BÀI 01/LPMB, THUẾ NHÀ THẦU, ...)
+# ==============================================================================
+def write_other_declarations_sheet(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+    sheet_name: str = "To_Khai_Khac",
+) -> None:
+    """
+    Tổng hợp đầy đủ dữ liệu các tờ khai thuộc nhóm 'Khác' (ví dụ: Tờ khai Lệ phí môn bài 01/LPMB,
+    Tờ khai thuế nhà thầu...) đúng bản chất dữ liệu:
+    - Với Tờ khai Lệ phí môn bài (01/LPMB): Tách chuẩn từng dòng Người nộp LPMB và từng Đơn vị phụ thuộc /
+      Địa điểm kinh doanh (DiaDiemKinhDoanh[1..N]) để không sót bất kỳ chi nhánh/địa điểm kinh doanh nào.
+    - Với các tờ khai Khác tổng quát: Xuất đầy đủ các chỉ tiêu không trùng lặp khóa alias.
+    """
+    unique_others = deduplicate_declarations(declarations)
+    if not unique_others:
+        return
+
+    sname = sanitize_sheet_name(sheet_name, existing_sheets)
+    ws = wb.create_sheet(title=sname)
+
+    sorted_others = sorted(
+        unique_others,
+        key=lambda d: (d.mst or "", d.year or 0, d.ky_kkhai or "", int(d.so_lan or 0) if str(d.so_lan or "").isdigit() else 0),
+    )
+
+    has_lpmb_structure = any(
+        any("nguoinop" in k.lower() or "diadiem" in k.lower() for k in d.indicators.keys())
+        for d in sorted_others
+    )
+
+    if has_lpmb_structure:
+        headers = [
+            "STT",
+            "Tên file XML",
+            "Mã tờ khai",
+            "Tên tờ khai",
+            "Kỳ kê khai",
+            "Lần kê khai",
+            "MST người nộp thuế",
+            "Tên người nộp thuế",
+            "Ngày lập",
+            "Khai bổ sung ĐĐKD mới [09]",
+            "Miễn LPMB năm đầu [10]",
+            "Loại đơn vị kê khai",
+            "Tên đơn vị / Địa điểm kinh doanh [02]",
+            "MST / Mã địa điểm kinh doanh [04]",
+            "Mã xã/phường",
+            "Tên xã/phường [03]",
+            "Mã tỉnh/TP",
+            "Tên tỉnh/TP [03a]",
+            "Vốn điều lệ / Doanh thu [05]",
+            "Mức lệ phí môn bài [06]",
+            "Số tiền LPMB phải nộp [07]",
+            "Số tiền LPMB được miễn [08]",
+            "Tổng số LPMB các ĐĐKD",
+            "Tổng số LPMB phải nộp cả tờ khai",
+        ]
+        ws.append(headers)
+        ws.row_dimensions[1].height = 28
+        for c_idx in range(1, len(headers) + 1):
+            cell = ws.cell(1, c_idx)
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = THIN_BORDER
+            ws.column_dimensions[get_column_letter(c_idx)].width = 20
+
+        cur_row = 2
+        stt_idx = 1
+        text_col_indices = {3, 5, 7, 14, 15, 17}
+        center_col_indices = {1, 3, 5, 6, 9, 10, 11, 15, 17}
+
+        for d in sorted_others:
+            inds = d.indicators
+            ct09_raw = inds.get("ct09", "false")
+            ct10_raw = inds.get("ct10", "false")
+            ct09_str = "Có" if str(ct09_raw).lower() in ("true", "1", "[x]") else "Không"
+            ct10_str = "Có" if str(ct10_raw).lower() in ("true", "1", "[x]") else "Không"
+            tong_ddkd = inds.get("tongcong_ddkd", 0) or 0
+            tong_all = inds.get("tong", inds.get("ct06", 0)) or 0
+            lan_num = int(d.so_lan) if str(d.so_lan or "").isdigit() else 0
+
+            # Thu thập danh sách các đơn vị (Người nộp LPMB + các Địa điểm kinh doanh)
+            unit_prefixes: List[Tuple[str, str]] = []
+            if any(k.startswith("NguoiNopLPMB.") for k in inds.keys()):
+                unit_prefixes.append(("1. Người nộp lệ phí môn bài", "NguoiNopLPMB"))
+
+            ddkd_prefixes: List[str] = []
+            for k in inds.keys():
+                if k.startswith("DiaDiemKD.DiaDiemKinhDoanh"):
+                    p = k.split(".ct")[0].split(".ma_")[0].split(".ten_")[0]
+                    if p not in ddkd_prefixes:
+                        ddkd_prefixes.append(p)
+            for b_idx, dp in enumerate(ddkd_prefixes, start=1):
+                unit_prefixes.append((f"2.{b_idx} Đơn vị phụ thuộc / ĐĐKD", dp))
+
+            if not unit_prefixes:
+                unit_prefixes.append(("1. Người nộp lệ phí môn bài", ""))
+
+            for u_label, u_pref in unit_prefixes:
+                if u_pref:
+                    u_ten = inds.get(f"{u_pref}.ct2") or d.ten_nnt
+                    u_mst = inds.get(f"{u_pref}.ct4") or d.mst
+                    u_ma_xa = inds.get(f"{u_pref}.ma_xa") or ""
+                    u_ten_xa = inds.get(f"{u_pref}.ten_xa") or ""
+                    u_ma_tinh = inds.get(f"{u_pref}.ct3a_ma") or ""
+                    u_ten_tinh = inds.get(f"{u_pref}.ct3a_ten") or ""
+                    u_von = inds.get(f"{u_pref}.ct5", 0) or 0
+                    u_muc = inds.get(f"{u_pref}.ct6", 0) or 0
+                    u_pnop = inds.get(f"{u_pref}.ct7", 0) or 0
+                    u_mien = inds.get(f"{u_pref}.ct8", 0) or 0
+                else:
+                    u_ten = d.ten_nnt
+                    u_mst = d.mst
+                    u_ma_xa = ""
+                    u_ten_xa = ""
+                    u_ma_tinh = ""
+                    u_ten_tinh = ""
+                    u_von = inds.get("ct05", 0) or 0
+                    u_muc = inds.get("ct06", 0) or 0
+                    u_pnop = inds.get("ct07", inds.get("ct06", 0)) or 0
+                    u_mien = inds.get("ct08", 0) or 0
+
+                row_vals = [
+                    stt_idx,
+                    d.file_name,
+                    d.ma_tkhai,
+                    d.ten_tkhai,
+                    d.ky_kkhai,
+                    lan_num,
+                    d.mst,
+                    d.ten_nnt,
+                    d.ngay_lap,
+                    ct09_str,
+                    ct10_str,
+                    u_label,
+                    u_ten,
+                    str(u_mst) if u_mst is not None else "",
+                    str(u_ma_xa) if u_ma_xa != "" else "",
+                    u_ten_xa,
+                    str(u_ma_tinh) if u_ma_tinh != "" else "",
+                    u_ten_tinh,
+                    u_von,
+                    u_muc,
+                    u_pnop,
+                    u_mien,
+                    tong_ddkd,
+                    tong_all,
+                ]
+                for c_i, val in enumerate(row_vals, start=1):
+                    cell = ws.cell(cur_row, c_i)
+                    write_cell_formatted(cell, val, is_mst=(c_i in text_col_indices))
+                    if c_i in center_col_indices:
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                cur_row += 1
+                stt_idx += 1
+
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{cur_row - 1}"
+        ws.freeze_panes = "F2"
+        return
+
+    # Trường hợp tờ khai Khác tổng quát
+    raw_keys: List[str] = []
+    seen_lower: Set[str] = set()
+    for d in unique_others:
+        for k in d.indicators.keys():
+            kl = k.lower()
+            if "." in k or k == kl:
+                if kl not in seen_lower:
+                    seen_lower.add(kl)
+                    raw_keys.append(k)
+
+    prefixed_leafs = {k.split(".")[-1].lower() for k in raw_keys if "." in k}
+    filtered_keys = [k for k in raw_keys if ("." in k or k.lower() not in prefixed_leafs)]
+
+    fixed_headers = [
+        "STT",
+        "Tên file XML",
+        "Mã tờ khai",
+        "Tên tờ khai",
+        "Kỳ kê khai",
+        "Lần kê khai",
+        "MST",
+        "Tên NNT",
+        "Ngày lập",
+    ]
+    headers = fixed_headers + filtered_keys
+    ws.append(headers)
+
+    ws.row_dimensions[1].height = 26
+    for c_idx in range(1, len(headers) + 1):
+        cell = ws.cell(1, c_idx)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = THIN_BORDER
+        ws.column_dimensions[get_column_letter(c_idx)].width = 20
+
+    for idx, d in enumerate(sorted_others, start=1):
+        r_idx = idx + 1
+        lan_num = int(d.so_lan) if str(d.so_lan or "").isdigit() else 0
+        fixed_vals = [
+            idx,
+            d.file_name,
+            d.ma_tkhai,
+            d.ten_tkhai,
+            d.ky_kkhai,
+            lan_num,
+            d.mst,
+            d.ten_nnt,
+            d.ngay_lap,
+        ]
+        for c_off, v in enumerate(fixed_vals, start=1):
+            write_cell_formatted(ws.cell(r_idx, c_off), v, is_mst=(c_off in (3, 5, 7)))
+        for k_off, k in enumerate(filtered_keys):
+            val = d.indicators.get(k)
+            kl = k.lower()
+            is_mst_col = any(t in kl for t in ("mst", ".ct4", "ma_xa", "ct3a_ma", "ma_cqt"))
+            write_cell_formatted(ws.cell(r_idx, len(fixed_headers) + 1 + k_off), val, is_mst=is_mst_col)
+
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(sorted_others) + 1}"
+    ws.freeze_panes = "F2"
+
+
+# ==============================================================================
+# 7. SHEET TỔNG HỢP DANH SÁCH FILE VÀ PHỤ LỤC KHÁC
+# ==============================================================================
+def write_summary_sheet(
+    wb: openpyxl.Workbook,
+    all_declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+) -> None:
+    sname = sanitize_sheet_name("Tong_hop_File", existing_sheets)
+    ws = wb.create_sheet(title=sname, index=0)
+
+    headers = [
+        "STT",
+        "Tên file XML",
+        "Nhóm thuế",
+        "Mã tờ khai",
+        "Lần",
+        "MST",
+        "Tên NNT",
+        "Kỳ kê khai",
+        "Ngày lập",
+        "Trạng thái",
+        "Đường dẫn",
+    ]
+    ws.append(headers)
+
+    seen_keys: Set[Tuple[str, str, str, str]] = set()
+    for idx, d in enumerate(all_declarations, start=1):
+        row_idx = idx + 1
+        if d.error:
+            status = f"Lỗi: {d.error}"
+        else:
+            ky_str = (
+                d.tu_ngay.strftime("%y%m")
+                if (d.tax_type == "GTGT" and d.tu_ngay)
+                else str(d.year or d.ky_kkhai or "")
+            )
+            lan_str = str(d.so_lan or "0").strip()
+            dedup_k = (d.tax_type or "", d.mst or "", ky_str, lan_str)
+            if dedup_k in seen_keys:
+                status = "Thành công (Trùng tờ khai)"
+            else:
+                seen_keys.add(dedup_k)
+                status = "Thành công"
+        lan_val = int(d.so_lan) if str(d.so_lan or "").isdigit() else (d.so_lan or 0)
+        vals = [
+            idx,
+            d.file_name,
+            d.tax_type,
+            d.ma_tkhai,
+            lan_val,
+            d.mst,
+            d.ten_nnt,
+            d.ky_kkhai,
+            d.ngay_lap,
+            status,
+            d.file_path,
+        ]
+        for c_idx, v in enumerate(vals, start=1):
+            cell = ws.cell(row_idx, c_idx)
+            write_cell_formatted(cell, v, is_mst=(c_idx in (4, 6, 8)))
+            if c_idx in (1, 4, 5, 8):
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            if d.error:
+                cell.fill = ERROR_FILL
+
+    ws.row_dimensions[1].height = 26
+    for c_idx in range(1, len(headers) + 1):
+        cell = ws.cell(1, c_idx)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = THIN_BORDER
+        col_letter = get_column_letter(c_idx)
+        ws.column_dimensions[col_letter].width = 18
+
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(all_declarations) + 1}"
+    ws.freeze_panes = "A2"
+
+
+APPENDIX_HEADER_LABELS: Dict[str, str] = {
+    "ma_giao_dich_goc": "Mã giao dịch tờ khai gốc",
+    "tieu_muc_ma": "Mã tiểu mục",
+    "tieu_muc_ten": "Tên tiểu mục",
+    "thue_phai_nop_tang_giam": "Thuế phải nộp điều chỉnh tăng/giảm",
+    "thue_hoan_phai_nop_tang_giam": "Thuế đã hoàn phải nộp trả tăng/giảm",
+    "thue_khau_tru_tang_giam": "Thuế khấu trừ điều chỉnh tăng/giảm",
+    "thue_de_nghi_hoan_tang_giam": "Thuế đề nghị hoàn điều chỉnh tăng/giảm",
+    "ngay_tinh_cham_nop": "Ngày tính chậm nộp",
+    "so_ngay_cham_nop": "Số ngày chậm nộp",
+    "tien_cham_nop": "Tiền chậm nộp",
+    "ly_do_giai_trinh": "Lý do / Giải trình",
+    "ma_HSo": "Mã hồ sơ",
+    "ten_HSo": "Tên tờ khai / Phụ lục",
+    "ct3_ma": "Mã chỉ tiêu điều chỉnh",
+    "ct3_ten": "Tên chỉ tiêu điều chỉnh",
+    "ct04": "Số đã kê khai [04]",
+    "ct05": "Số điều chỉnh [05]",
+    "ct06": "Chênh lệch [06]=[05]-[04]",
+    "ct7": "Thuế đã hoàn phải nộp trả [07]",
+    "ct3_2_ten": "Lý do điều chỉnh chi tiết",
+    "nhom_phu_luc": "Nhóm bảng kê (Mua vào / Bán ra)",
+    "tenHHDVMuaVao": "Tên HHDV mua vào",
+    "giaTriHHDVMuaVao": "Giá trị HHDV mua vào chưa thuế",
+    "thueGTGTHHDV": "Thuế GTGT HHDV mua vào được giảm",
+    "tenHHDV": "Tên HHDV bán ra",
+    "giaTriHHDV": "Giá trị HHDV bán ra chưa thuế",
+    "thueSuatTheoQuyDinh": "Thuế suất theo quy định (%)",
+    "thueSuatSauGiam": "Thuế suất sau giảm (%)",
+    "thueGTGTDuocGiam": "Thuế GTGT HHDV bán ra được giảm",
+    "nhom_lo": "Nhóm chuyển lỗ",
+    "namPSinhLo": "Năm phát sinh lỗ",
+    "soLoPSinh": "Số lỗ phát sinh",
+    "soLoDaChuyen": "Số lỗ đã chuyển các kỳ trước",
+    "soLoKyNay": "Số lỗ được chuyển kỳ này",
+    "soLoChuyenSau": "Số lỗ còn được chuyển kỳ sau",
+    "tenLKet": "Tên bên liên kết",
+    "ma_quocGia": "Mã quốc gia",
+    "ten_quocGia": "Tên quốc gia",
+    "mstLKet": "MST bên liên kết",
+    "ma_chi_tieu": "Mã số",
+    "ten_chi_tieu": "Chỉ tiêu",
+    "thuyet_minh": "Thuyết minh",
+    "nam_nay": "Số năm nay",
+    "nam_truoc": "Số năm trước",
+}
+
+
+def filter_latest_per_period(declarations: List[TaxDeclaration]) -> List[TaxDeclaration]:
+    """
+    Lọc bản kê khai có hiệu lực cuối cùng cho mỗi kỳ tính thuế (Nhóm thuế, MST, Kỳ tính thuế)
+    và tự động kế thừa các phụ lục nghiệp vụ không thay đổi từ lần kê khai trước của cùng kỳ.
+    Dùng cho các sheet phụ lục nghiệp vụ (NQ43, NQ101, NQ142, 03-1A, 03-2, GDLK, KQHDSXKD, LCTTGT)
+    để không bị nhân đôi số liệu giữa tờ khai lần đầu (CT0) và các tờ khai bổ sung (BS1, BS2...).
+    """
+    unique_decls = deduplicate_declarations(declarations)
+    grouped: Dict[Tuple[str, str, str], List[TaxDeclaration]] = {}
+    for d in unique_decls:
+        if d.tax_type == "GTGT" and d.tu_ngay:
+            ky_norm = d.tu_ngay.strftime("%y%m")
+        else:
+            ky_norm = str(d.year or d.ky_kkhai or "").strip()
+        key = (d.tax_type or "", (d.mst or "").strip(), ky_norm)
+        grouped.setdefault(key, []).append(d)
+
+    latest_list: List[TaxDeclaration] = []
+    for key, dlist in grouped.items():
+        def sort_k(item: TaxDeclaration):
+            try:
+                lan = int(item.so_lan) if item.so_lan is not None and str(item.so_lan).strip() != "" else 0
+            except (ValueError, TypeError):
+                lan = 0
+            nlap = item.ngay_lap or datetime.date.min
+            valid_inds = sum(1 for v in item.indicators.values() if v not in (None, 0, "", "0"))
+            app_count = sum(len(rows) for rows in item.appendices.values())
+            return (lan, nlap, valid_inds, app_count, len(item.file_name), item.file_name)
+
+        dlist.sort(key=sort_k)
+        latest = dlist[-1]
+        if len(dlist) > 1:
+            merged_apps = dict(latest.appendices)
+            for prev in reversed(dlist[:-1]):
+                for app_name, app_rows in prev.appendices.items():
+                    if "khbs" in app_name.lower():
+                        continue
+                    if not merged_apps.get(app_name) and app_rows:
+                        merged_apps[app_name] = app_rows
+            latest.appendices = merged_apps
+        latest_list.append(latest)
+
+    latest_list.sort(
+        key=lambda d: (
+            d.tax_type or "",
+            d.mst or "",
+            d.year or 0,
+            d.tu_ngay or datetime.date.min,
+            d.ky_kkhai or "",
+        )
+    )
+    return latest_list
+
+
+def write_appendix_sheets(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+) -> None:
+    """
+    Xuất các sheet phụ lục (PL_...) đã được làm sạch và chuẩn hóa đúng bản chất dữ liệu:
+    - Với PL01_KHBS và PL01_1_KHBS: Giữ toàn bộ các lần khai bổ sung (đã khử trùng file) để phản ánh
+      đầy đủ lịch sử điều chỉnh của từng lần bổ sung.
+    - Với các phụ lục nghiệp vụ (NQ43, NQ101, NQ142, 03-1A, 03-2, GDLK, KQHDSXKD, LCTTGT): Chỉ lấy
+      bản kê khai hiệu lực cuối cùng của mỗi kỳ tính thuế để không bị trùng lặp số liệu giữa CT0 và BS.
+    - Bỏ qua các phụ lục 05-1, 05-2, 05-3 của TNCN vì đã được xuất thành 3 sheet chuẩn mẫu '05-1', '05-2', '05-3'.
+    """
+    unique_decls = sorted(
+        deduplicate_declarations(declarations),
+        key=lambda d: (
+            d.tax_type or "",
+            d.mst or "",
+            d.year or 0,
+            d.tu_ngay or datetime.date.min,
+            int(d.so_lan) if str(d.so_lan or "").isdigit() else 0,
+        ),
+    )
+    latest_period_decls = filter_latest_per_period(unique_decls)
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+
+    # 1. Thu thập PL01_KHBS và PL01_1_KHBS từ tất cả các tờ khai bổ sung (unique_decls)
+    for d in unique_decls:
+        lan_val = int(d.so_lan) if str(d.so_lan or "").isdigit() else (d.so_lan or 0)
+        for pl_name, rows in d.appendices.items():
+            pl_u = pl_name.upper()
+            if "KHBS" not in pl_u:
+                continue
+            bucket = grouped.setdefault(pl_name, [])
+            for r in rows:
+                enriched: Dict[str, Any] = {
+                    "_file": d.file_name,
+                    "_mst": d.mst,
+                    "_ky": d.ky_kkhai,
+                    "_so_lan": lan_val,
+                    "_ma_tkhai": d.ma_tkhai,
+                }
+                for k, v in r.items():
+                    if k not in enriched:
+                        enriched[k] = v
+                bucket.append(enriched)
+
+    # 2. Thu thập các phụ lục nghiệp vụ từ bản hiệu lực cuối cùng của mỗi kỳ tính thuế (latest_period_decls)
+    for d in latest_period_decls:
+        lan_val = int(d.so_lan) if str(d.so_lan or "").isdigit() else (d.so_lan or 0)
+        for pl_name, rows in d.appendices.items():
+            pl_u = pl_name.upper()
+            if "KHBS" in pl_u:
+                continue
+            if any(t in pl_u for t in ("05_1", "05-1", "051", "05_2", "05-2", "052", "05_3", "05-3", "053")):
+                continue
+            bucket = grouped.setdefault(pl_name, [])
+            for r in rows:
+                enriched = {
+                    "_file": d.file_name,
+                    "_mst": d.mst,
+                    "_ky": d.ky_kkhai,
+                    "_so_lan": lan_val,
+                    "_ma_tkhai": d.ma_tkhai,
+                }
+                for k, v in r.items():
+                    if k not in enriched:
+                        enriched[k] = v
+                bucket.append(enriched)
+
+    text_code_keys = {
+        "_mst",
+        "_ky",
+        "_ma_tkhai",
+        "mstlket",
+        "ma_hso",
+        "ct3_ma",
+        "ma_chi_tieu",
+        "tieu_muc_ma",
+        "ma_giao_dich_goc",
+        "ma_quocgia",
+        "thuyet_minh",
+    }
+    plain_int_keys = {
+        "_so_lan",
+        "nampsinhlo",
+        "so_ngay_cham_nop",
+        "thuesuattheoquydinh",
+        "thuesuatsaugiam",
+    }
+
+    for pl_name, rows in grouped.items():
+        if not rows:
+            continue
+        sname = sanitize_sheet_name(f"PL_{pl_name}", existing_sheets)
+        ws = wb.create_sheet(title=sname)
+
+        fixed_cols = ["_file", "_mst", "_ky", "_so_lan", "_ma_tkhai"]
+        fixed_labels = ["Tên file XML", "MST người nộp thuế", "Kỳ kê khai", "Lần kê khai", "Mã tờ khai"]
+
+        dyn_keys: List[str] = []
+        seen_lower: Set[str] = set()
+        for r in rows:
+            for k in r.keys():
+                if k not in fixed_cols:
+                    kl = k.lower()
+                    if kl not in seen_lower:
+                        seen_lower.add(kl)
+                        dyn_keys.append(k)
+
+        pl_u = pl_name.upper()
+        kqkd_label_map: Dict[str, str] = {}
+        if "03_1A" in pl_u:
+            src_rows = KQKD_156_ROWS if "PL03_1A" in pl_u else KQKD_80_ROWS
+            for _stt, desc, code in src_rows:
+                clean_num = code.strip("[]")
+                kqkd_label_map[f"ct{clean_num}"] = f"{desc} {code}"
+
+        dyn_labels: List[str] = []
+        for k in dyn_keys:
+            if k in kqkd_label_map:
+                dyn_labels.append(kqkd_label_map[k])
+            elif k in ("ct04", "ct05", "ct06", "ct7") and "KHBS" not in pl_u:
+                dyn_labels.append(k)
+            else:
+                dyn_labels.append(APPENDIX_HEADER_LABELS.get(k, k))
+        headers = ["STT"] + fixed_labels + dyn_labels
+        ws.append(headers)
+
+        for idx, r in enumerate(rows, start=1):
+            row_idx = idx + 1
+            c_stt = ws.cell(row_idx, 1)
+            write_cell_formatted(c_stt, idx)
+            c_stt.alignment = Alignment(horizontal="center", vertical="center")
+
+            for c_off, fk in enumerate(fixed_cols):
+                col_i = 2 + c_off
+                cell = ws.cell(row_idx, col_i)
+                fkl = fk.lower()
+                is_txt = fkl in text_code_keys
+                write_cell_formatted(cell, r.get(fk), is_mst=is_txt)
+                if fkl in ("_ky", "_so_lan", "_ma_tkhai"):
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            for k_off, dk in enumerate(dyn_keys):
+                col_i = 2 + len(fixed_cols) + k_off
+                cell = ws.cell(row_idx, col_i)
+                val = _first_not_none(r, (dk,))
+                dkl = dk.lower()
+                is_txt = (
+                    dkl in text_code_keys
+                    or "mst" in dkl
+                    or "socmt" in dkl
+                    or "cccd" in dkl
+                    or dkl.startswith("ma_")
+                    or dkl.endswith("_ma")
+                )
+                write_cell_formatted(cell, val, is_mst=is_txt)
+                if dkl in plain_int_keys:
+                    if isinstance(cell.value, (int, float)):
+                        cell.number_format = "0"
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif is_txt and dkl != "ma_giao_dich_goc":
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        ws.row_dimensions[1].height = 28
+        for c in range(1, len(headers) + 1):
+            cell = ws.cell(1, c)
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = THIN_BORDER
+            ws.column_dimensions[get_column_letter(c)].width = 20
+        ws.column_dimensions["A"].width = 7
+        ws.column_dimensions["B"].width = 36
+
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(rows) + 1}"
+        ws.freeze_panes = "G2"
+
+
+# ==============================================================================
+# HÀM XUẤT CHÍNH: EXPORT TO EXCEL (Hỗ trợ tách file theo năm, theo sắc thuế hoặc gộp)
+# ==============================================================================
+def _populate_workbook_sheets(
+    wb: openpyxl.Workbook,
+    all_decls: List[TaxDeclaration],
+    valid_decls: List[TaxDeclaration],
+    include_appendices: bool = True,
+) -> None:
+    """Điền đầy đủ các sheet dữ liệu chuẩn vào Workbook."""
+    existing_sheets: Set[str] = set()
+
+    write_summary_sheet(wb, all_decls, existing_sheets)
+
+    tndn_items = [d for d in valid_decls if d.tax_type == "TNDN"]
+    if tndn_items:
+        latest_tndn = filter_latest_per_year(tndn_items)
+        write_sheet_kktndn(wb, latest_tndn, existing_sheets)
+        write_sheet_kqkd(wb, latest_tndn, existing_sheets)
+
+    bctc_items = [d for d in valid_decls if d.tax_type == "BCTC"]
+    if bctc_items:
+        latest_bctc = filter_latest_per_year(bctc_items)
+        write_sheet_bctc_cdkt(wb, latest_bctc, existing_sheets)
+
+    tncn_items = [d for d in valid_decls if d.tax_type == "TNCN"]
+    if tncn_items:
+        latest_tncn = filter_latest_per_year(tncn_items)
+        write_sheet_tncn_master(wb, latest_tncn, existing_sheets)
+        if include_appendices:
+            write_consolidated_tncn_appendices(wb, latest_tncn, existing_sheets)
+
+    gtgt_items = [d for d in valid_decls if d.tax_type == "GTGT"]
+    if gtgt_items:
+        write_gtgt_timeline_sheet(wb, gtgt_items, existing_sheets, sheet_name="So Thue GTGT TH")
+        write_gtgt_cuoi_sheet(wb, gtgt_items, existing_sheets, sheet_name="So Thue GTGT Cuoi")
+
+    if gtgt_items or tndn_items:
+        write_sheet_chenh_lech_gtgt_tndn(wb, existing_sheets)
+
+    other_items = [d for d in valid_decls if d.tax_type == "Khác"]
+    if other_items:
+        write_other_declarations_sheet(wb, other_items, existing_sheets, sheet_name="To_Khai_Khac")
+
+    if include_appendices and valid_decls:
+        write_appendix_sheets(wb, valid_decls, existing_sheets)
+
+
+def export_to_excel(
+    declarations: List[TaxDeclaration],
+    output_path: str,
+    include_appendices: bool = True,
+    split_by_tax_type: bool = False,
+    split_by_year: bool = False,
+    layout: str = "vertical",
+) -> List[str]:
+    """
+    Xuất danh sách TaxDeclaration ra file Excel chuẩn 100% mẫu người dùng (Phiên bản v1.2):
+    - Nếu split_by_year=True: Mỗi năm ra 1 file Excel riêng biệt (VD: QTT_TNCN_2024.xlsx có 4 sheet TK, 05-1, 05-2, 05-3).
+    - Nếu split_by_tax_type=True: Mỗi nhóm sắc thuế ra 1 file Excel riêng biệt.
+    - Ngược lại: Xuất vào 1 file tổng hợp đầy đủ các sheet.
+    """
+    created_files: List[str] = []
+    valid = [d for d in declarations if not d.error]
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(out_dir, exist_ok=True)
+    base_name, ext = os.path.splitext(output_path)
+    if not ext:
+        ext = ".xlsx"
+
+    # CHẾ ĐỘ 1: XUẤT THEO NĂM (Mỗi năm ra 1 file Excel)
+    if split_by_year:
+        years_set = {d.year for d in valid if d.year is not None}
+        for yr in sorted(years_set):
+            yr_decls = [d for d in valid if d.year == yr]
+            tncn_decls = [d for d in yr_decls if d.tax_type == "TNCN"]
+
+            if tncn_decls:
+                latest_tncn = filter_latest_per_year(tncn_decls)
+                if latest_tncn:
+                    tncn_file = os.path.join(out_dir, f"QTT_TNCN_{yr}{ext}")
+                    write_single_year_tncn_file(tncn_file, latest_tncn[-1])
+                    created_files.append(tncn_file)
+
+            other_decls = [d for d in yr_decls if d.tax_type != "TNCN"]
+            if other_decls:
+                yr_wb = openpyxl.Workbook()
+                yr_wb.remove(yr_wb.active)
+                existing: Set[str] = set()
+
+                tndn_items = [d for d in other_decls if d.tax_type == "TNDN"]
+                if tndn_items:
+                    write_sheet_kktndn(yr_wb, filter_latest_per_year(tndn_items), existing)
+                    write_sheet_kqkd(yr_wb, filter_latest_per_year(tndn_items), existing)
+
+                bctc_items = [d for d in other_decls if d.tax_type == "BCTC"]
+                if bctc_items:
+                    write_sheet_bctc_cdkt(yr_wb, filter_latest_per_year(bctc_items), existing)
+
+                gtgt_items = [d for d in other_decls if d.tax_type == "GTGT"]
+                if gtgt_items:
+                    write_gtgt_timeline_sheet(yr_wb, gtgt_items, existing, sheet_name="So Thue GTGT TH")
+                    write_gtgt_cuoi_sheet(yr_wb, gtgt_items, existing, sheet_name="So Thue GTGT Cuoi")
+
+                if gtgt_items or tndn_items:
+                    write_sheet_chenh_lech_gtgt_tndn(yr_wb, existing)
+
+                khac_items = [d for d in other_decls if d.tax_type == "Khác"]
+                if khac_items:
+                    write_other_declarations_sheet(yr_wb, khac_items, existing, sheet_name="To_Khai_Khac")
+
+                if include_appendices:
+                    write_appendix_sheets(yr_wb, other_decls, existing)
+
+                yr_file = os.path.join(out_dir, f"ToKhai_{yr}{ext}")
+                yr_wb.save(yr_file)
+                created_files.append(yr_file)
+
+        return created_files
+
+    # CHẾ ĐỘ 2: TÁCH THEO NHÓM SẮC THUẾ
+    if split_by_tax_type:
+        tax_types = sorted({d.tax_type for d in valid})
+        for t_type in tax_types:
+            sub_decls = [d for d in valid if d.tax_type == t_type]
+            if not sub_decls:
+                continue
+            wb = openpyxl.Workbook()
+            wb.remove(wb.active)
+            _populate_workbook_sheets(wb, sub_decls, sub_decls, include_appendices=include_appendices)
+            sub_path = f"{base_name}_{t_type}{ext}"
+            wb.save(sub_path)
+            created_files.append(sub_path)
+        return created_files
+
+    # CHẾ ĐỘ 3: FILE GỘP TỔNG HỢP
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    _populate_workbook_sheets(wb, declarations, valid, include_appendices=include_appendices)
+    wb.save(output_path)
+    created_files.append(output_path)
+
+    return created_files
