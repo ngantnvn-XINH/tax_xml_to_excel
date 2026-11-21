@@ -617,12 +617,11 @@ def summarize_tax_payments_to_excel(input_path: str, output_paths: List[str]) ->
 
 
 if __name__ == "__main__":
-    src = r"C:\Users\Admin\.gemini\antigravity\brain\74addb61-c896-4052-bc3d-ededa129ccfc\.user_uploaded\media_1795265102292_afb374a5.xlsx"
-    if not os.path.exists(src):
-        src = r"D:\2026\MANY\TCS_MANY\TCS_MANY\0313248400-CTUNOP.XLSX"
-    outs = [
-        r"D:\2026\MANY\TCS_MANY\TCS_MANY\TongHop_SoNop_TheoNam_TieuMuc.xlsx",
-        r"C:\Users\Admin\.gemini\antigravity\scratch\tax_xml_to_excel\TongHop_SoNop_TheoNam_TieuMuc.xlsx",
-    ]
-    res = summarize_tax_payments_to_excel(src, outs)
-    print("Exported successfully:", outs, "Rows:", res["total_rows"])
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python payment_summarizer.py <path_to_ctunop.xlsx> [output.xlsx]")
+        sys.exit(0)
+    src = sys.argv[1]
+    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(src), "TongHop_SoNop_TheoNam_TieuMuc.xlsx")
+    res = summarize_tax_payments_to_excel(src, [out])
+    print("Exported successfully:", out, "Rows:", res["total_rows"])

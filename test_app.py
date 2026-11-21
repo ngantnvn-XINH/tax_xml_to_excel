@@ -220,23 +220,23 @@ class TestTaxXmlToExcel(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Giả lập 2 file 2508 lần 0 và 2 file 2508 lần 1 (tổng cộng 4 file)
             d1_ct0 = TaxDeclaration(
-                file_path="f1.xml", file_name="0313248400_01GTGT_25M08_CT_0.xml", tax_type="GTGT",
-                mst="0313248400", ky_kkhai="08/2025", so_lan="0", tu_ngay=datetime.date(2025, 8, 1),
+                file_path="f1.xml", file_name="0100000001_01GTGT_25M08_CT_0.xml", tax_type="GTGT",
+                mst="0100000001", ky_kkhai="08/2025", so_lan="0", tu_ngay=datetime.date(2025, 8, 1),
                 ngay_lap=datetime.date(2025, 9, 17), indicators={"ct40": 374974620}
             )
             d2_ct0 = TaxDeclaration(
-                file_path="f2.xml", file_name="0313248400_08-2025_01-GTGT_CT0_1_21420250009848413.xml", tax_type="GTGT",
-                mst="0313248400", ky_kkhai="08/2025", so_lan="0", tu_ngay=datetime.date(2025, 8, 1),
+                file_path="f2.xml", file_name="0100000001_08-2025_01-GTGT_CT0_1_21420250009848413.xml", tax_type="GTGT",
+                mst="0100000001", ky_kkhai="08/2025", so_lan="0", tu_ngay=datetime.date(2025, 8, 1),
                 ngay_lap=datetime.date(2025, 9, 17), indicators={"ct40": 374974620}
             )
             d3_bs1 = TaxDeclaration(
-                file_path="f3.xml", file_name="0313248400_01GTGT_25M08_BS_1.xml", tax_type="GTGT",
-                mst="0313248400", ky_kkhai="08/2025", so_lan="1", tu_ngay=datetime.date(2025, 8, 1),
+                file_path="f3.xml", file_name="0100000001_01GTGT_25M08_BS_1.xml", tax_type="GTGT",
+                mst="0100000001", ky_kkhai="08/2025", so_lan="1", tu_ngay=datetime.date(2025, 8, 1),
                 ngay_lap=datetime.date(2025, 10, 14), indicators={"ct40": 365632924}
             )
             d4_bs1 = TaxDeclaration(
-                file_path="f4.xml", file_name="0313248400_08-2025_01-GTGT_BS1_1_21420250009862365.xml", tax_type="GTGT",
-                mst="0313248400", ky_kkhai="08/2025", so_lan="1", tu_ngay=datetime.date(2025, 8, 1),
+                file_path="f4.xml", file_name="0100000001_08-2025_01-GTGT_BS1_1_21420250009862365.xml", tax_type="GTGT",
+                mst="0100000001", ky_kkhai="08/2025", so_lan="1", tu_ngay=datetime.date(2025, 8, 1),
                 ngay_lap=datetime.date(2025, 10, 14), indicators={"ct40": 365632924}
             )
 
@@ -273,7 +273,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             dBCTC = TaxDeclaration(
                 file_path="bctc2020.xml", file_name="bctc2020.xml", tax_type="BCTC",
-                mst="0313248400", ky_kkhai="2020",
+                mst="0100000001", ky_kkhai="2020",
                 indicators={
                     "CDKT_HoatDongLienTuc.SoCuoiNam.ct100": 41557960607,
                     "CDKT_HoatDongLienTuc.SoDauNam.ct100": 88318848856,
@@ -309,14 +309,14 @@ class TestTaxXmlToExcel(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             dGTGT = TaxDeclaration(
                 file_path="gtgt2024.xml", file_name="gtgt2024.xml", tax_type="GTGT",
-                mst="0313248400", ky_kkhai="12/2024", so_lan="0",
+                mst="0100000001", ky_kkhai="12/2024", so_lan="0",
                 tu_ngay=datetime.date(2024, 12, 1), den_ngay=datetime.date(2024, 12, 31),
                 ngay_lap=datetime.date(2025, 1, 20),
                 indicators={"ct34": 50000000000, "ct40": 5000000000}
             )
             dTNDN = TaxDeclaration(
                 file_path="tndn2024.xml", file_name="tndn2024.xml", tax_type="TNDN",
-                mst="0313248400", ky_kkhai="2024", so_lan="0",
+                mst="0100000001", ky_kkhai="2024", so_lan="0",
                 tu_ngay=datetime.date(2024, 1, 1), den_ngay=datetime.date(2024, 12, 31),
                 ngay_lap=datetime.date(2025, 3, 30),
                 indicators={"ct04": 48000000000, "ct06": 1000000000, "ct19": 200000000}
@@ -378,7 +378,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         <KyKKhaiThue><kyKKhai>2020</kyKKhai><kyKKhaiTuNgay>01/01/2020</kyKKhaiTuNgay><kyKKhaiDenNgay>31/12/2020</kyKKhaiDenNgay></KyKKhaiThue>
         <ngayLapTKhai>2021-03-30</ngayLapTKhai><soLan>0</soLan>
       </TKhaiThue>
-      <NNT><mst>0313248400</mst><tenNNT>CTY A</tenNNT></NNT>
+      <NNT><mst>0100000001</mst><tenNNT>CTY A</tenNNT></NNT>
     </TTinTKhaiThue></TTinChung>
     <CTieuTKhaiChinh>
       <ctA1>-24131629971</ctA1>
@@ -407,7 +407,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         <KyKKhaiThue><kyKKhai>2024</kyKKhai><kyKKhaiTuNgay>01/01/2024</kyKKhaiTuNgay><kyKKhaiDenNgay>31/12/2024</kyKKhaiDenNgay></KyKKhaiThue>
         <ngayLapTKhai>2025-03-31</ngayLapTKhai><soLan>0</soLan>
       </TKhaiThue>
-      <NNT><mst>0313248400</mst><tenNNT>CTY A</tenNNT></NNT>
+      <NNT><mst>0100000001</mst><tenNNT>CTY A</tenNNT></NNT>
     </TTinTKhaiThue></TTinChung>
     <CTieuTKhaiChinh>
       <ct05>100</ct05>
@@ -473,7 +473,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         <KyKKhaiThue><kyKKhai>2023</kyKKhai><kyKKhaiTuNgay>01/01/2023</kyKKhaiTuNgay><kyKKhaiDenNgay>31/12/2023</kyKKhaiDenNgay></KyKKhaiThue>
         <ngayLapTKhai>2024-03-30</ngayLapTKhai><soLan>0</soLan>
       </TKhaiThue>
-      <NNT><mst>0313248400</mst><tenNNT>CTY A</tenNNT></NNT>
+      <NNT><mst>0100000001</mst><tenNNT>CTY A</tenNNT></NNT>
     </TTinTKhaiThue></TTinChung>
     <CTieuTKhaiChinh><ct21>10</ct21><ct22>1</ct22></CTieuTKhaiChinh>
     <PLuc>
@@ -497,7 +497,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         <KyKKhaiThue><kyKKhai>2023</kyKKhai><kyKKhaiTuNgay>01/01/2023</kyKKhaiTuNgay><kyKKhaiDenNgay>31/12/2023</kyKKhaiDenNgay></KyKKhaiThue>
         <ngayLapTKhai>2024-06-15</ngayLapTKhai><soLan>1</soLan>
       </TKhaiThue>
-      <NNT><mst>0313248400</mst><tenNNT>CTY A</tenNNT></NNT>
+      <NNT><mst>0100000001</mst><tenNNT>CTY A</tenNNT></NNT>
     </TTinTKhaiThue></TTinChung>
     <CTieuTKhaiChinh><ct21>10</ct21><ct22>1</ct22></CTieuTKhaiChinh>
     <PLuc>
@@ -555,7 +555,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         <KyKKhaiThue><kyKKhai>2024</kyKKhai><kyKKhaiTuNgay>01/01/2024</kyKKhaiTuNgay><kyKKhaiDenNgay>31/12/2024</kyKKhaiDenNgay></KyKKhaiThue>
         <ngayLapTKhai>2025-03-30</ngayLapTKhai><soLan>0</soLan>
       </TKhaiThue>
-      <NNT><mst>0313248400</mst><tenNNT>CTY A</tenNNT></NNT>
+      <NNT><mst>0100000001</mst><tenNNT>CTY A</tenNNT></NNT>
     </TTinTKhaiThue></TTinChung>
     <CTieuTKhaiChinh>
       <CDKT_HoatDongLienTuc>
@@ -574,7 +574,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         <KyKKhaiThue><kyKKhai>2023</kyKKhai><kyKKhaiTuNgay>01/01/2023</kyKKhaiTuNgay><kyKKhaiDenNgay>31/12/2023</kyKKhaiDenNgay></KyKKhaiThue>
         <ngayLapTKhai>2023-01-15</ngayLapTKhai><soLan>0</soLan>
       </TKhaiThue>
-      <NNT><mst>0313248400</mst><tenNNT>CTY A</tenNNT></NNT>
+      <NNT><mst>0100000001</mst><tenNNT>CTY A</tenNNT></NNT>
     </TTinTKhaiThue></TTinChung>
     <CTieuTKhaiChinh><ct06>3000000</ct06></CTieuTKhaiChinh>
   </HSoKhaiThue>
@@ -606,7 +606,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
                 file_path="gtgt_2024_12.xml", file_name="gtgt_2024_12.xml",
                 ma_tkhai="842", ten_tkhai="Tờ khai thuế GTGT", tax_type="GTGT",
                 ky_kkhai="12/2024", so_lan="0",
-                mst="0313248400", ten_nnt="CTY A",
+                mst="0100000001", ten_nnt="CTY A",
                 tu_ngay=datetime.date(2024, 12, 1), den_ngay=datetime.date(2024, 12, 31),
                 ngay_lap=datetime.date(2025, 1, 20),
                 indicators={"ct22": 1000000, "ct32": 50000000, "ct33": 5000000, "ct43": 2000000}
@@ -615,7 +615,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
                 file_path="tndn_2024.xml", file_name="tndn_2024.xml",
                 ma_tkhai="892", ten_tkhai="Tờ khai QTT TNDN", tax_type="TNDN",
                 ky_kkhai="2024", so_lan="0",
-                mst="0313248400", ten_nnt="CTY A",
+                mst="0100000001", ten_nnt="CTY A",
                 tu_ngay=datetime.date(2024, 1, 1), den_ngay=datetime.date(2024, 12, 31),
                 ngay_lap=datetime.date(2025, 3, 30),
                 indicators={"ct04": 50000000, "ctB4": 3000000}
@@ -624,7 +624,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
                 file_path="tncn_2024.xml", file_name="tncn_2024.xml",
                 ma_tkhai="864", ten_tkhai="Tờ khai QTT TNCN", tax_type="TNCN",
                 ky_kkhai="2024", so_lan="0",
-                mst="0313248400", ten_nnt="CTY A",
+                mst="0100000001", ten_nnt="CTY A",
                 tu_ngay=datetime.date(2024, 1, 1), den_ngay=datetime.date(2024, 12, 31),
                 ngay_lap=datetime.date(2025, 3, 30),
                 indicators={"ct21": 5},
@@ -647,6 +647,40 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws.cell(84, 3).value, "='TNCN'!G41")
             self.assertEqual(ws.cell(85, 3).value, "='TNCN'!G42")
             self.assertEqual(ws.cell(90, 3).value, "=C85+C87+C89")
+
+    def test_qhns_opening_exact_c5_refund_and_bt_exclusion(self) -> None:
+        """Kiểm thử tính số dư đầu kỳ tuyệt đối (Bucket C), hoàn nộp thừa C5, và loại bỏ bút toán BT."""
+        from qhns_summarizer import compute_tq_metrics
+
+        tq_rows = [
+            # GTGT (1701): nộp thừa kỳ trước -49,274,310 + QT 15CN nộp năm 2021 (+64,511,180) + TK 1912 nộp 2020 (+847,949,684)
+            {"ky": "18Q4", "ky_year": 2018, "gd": "C2", "tm": "1701", "so_tien": -49274310.0, "ht_year": 2019, "no_co": ""},
+            {"ky": "1912", "ky_year": 2019, "gd": "TK", "tm": "1701", "so_tien": 847949684.0, "ht_year": 2020, "no_co": ""},
+            {"ky": "1912", "ky_year": 2019, "gd": "C2", "tm": "1701", "so_tien": -847949684.0, "ht_year": 2020, "no_co": ""},
+            {"ky": "15CN", "ky_year": 2015, "gd": "QT", "tm": "1701", "so_tien": 64511180.0, "ht_year": 2021, "no_co": ""},
+            {"ky": "2001", "ky_year": 2020, "gd": "TK", "tm": "1701", "so_tien": 100000000.0, "ht_year": 2020, "no_co": ""},
+            {"ky": "2001", "ky_year": 2020, "gd": "C2", "tm": "1701", "so_tien": -50000000.0, "ht_year": 2020, "no_co": ""},
+            # TNDN (1052): nộp thừa 2018 (-12,081,620) và 2019 (-100,000,000), hoàn nộp thừa C5 năm 2024 (+100,000,000)
+            {"ky": "1811", "ky_year": 2018, "gd": "C2", "tm": "1052", "so_tien": -12081620.0, "ht_year": 2018, "no_co": ""},
+            {"ky": "1812", "ky_year": 2018, "gd": "C2", "tm": "1052", "so_tien": -100000000.0, "ht_year": 2019, "no_co": ""},
+            {"ky": "2411", "ky_year": 2024, "gd": "PT", "tm": "1052", "so_tien": -100000000.0, "ht_year": 2024, "no_co": ""},
+            {"ky": "2411", "ky_year": 2024, "gd": "QH", "tm": "1052", "so_tien": 100000000.0, "ht_year": 2024, "no_co": ""},
+            {"ky": "2411", "ky_year": 2024, "gd": "C5", "tm": "1052", "so_tien": 100000000.0, "ht_year": 2024, "no_co": ""},
+            # Bút toán BT nội bộ phải bị bỏ qua
+            {"ky": "20CN", "ky_year": 2020, "gd": "BT", "tm": "1052", "so_tien": -1000000.0, "ht_year": 2021, "no_co": ""},
+            {"ky": "21CN", "ky_year": 2021, "gd": "BT", "tm": "1052", "so_tien": 1000000.0, "ht_year": 2021, "no_co": ""},
+        ]
+        m = compute_tq_metrics(tq_rows, 2020, 2024)
+        # GTGT đầu kỳ = -49,274,310 + 847,949,684 + 64,511,180 = 863,186,554
+        self.assertEqual(round(m["opening_exact"]["1701"]), 863186554)
+        # Dư cuối GTGT = 863,186,554 + 100,000,000 - (847,949,684 + 50,000,000) = 65,236,870 (khớp tổng TQ!)
+        gtgt_close = round(m["opening_exact"]["1701"] + sum(m["gtgt_tk_by_ky"].values()) - sum(m["gtgt_c2_by_ht"].values()))
+        self.assertEqual(gtgt_close, 65236870)
+        # TNDN đầu kỳ = -112,081,620; năm 2024 hoàn C5 -> số nộp = -100,000,000; dư cuối = -12,081,620
+        self.assertEqual(round(m["opening_exact"]["1052"]), -112081620)
+        self.assertEqual(round(m["tndn_c2_by_ht"][2024]), -100000000)
+        tndn_close = round(m["opening_exact"]["1052"] + sum(m["tndn_tk_qt_by_ky"].values()) - sum(m["tndn_c2_by_ht"].values()))
+        self.assertEqual(tndn_close, -12081620)
 
 
 if __name__ == "__main__":

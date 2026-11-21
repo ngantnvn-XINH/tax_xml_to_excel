@@ -159,6 +159,8 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         "dk_tncn_c2_notes": [],
         "dk_tncn_qt_prev": 0.0,
         "dk_tncn_qt_notes": [],
+        # Số dư đầu kỳ chính xác tuyệt đối tại 01/01/start_year theo phương pháp phân hoạch Sổ TQ
+        "opening_exact": {"1701": 0.0, "1052": 0.0, "1001": 0.0},
         # Phát hiện kỳ thiếu TK trên TQ (có C2 nhưng không có TK)
         "tncn_tk_periods": defaultdict(set),
         "tncn_c2_periods": defaultdict(set),
@@ -172,15 +174,27 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
 
     def payment_amount(item: Dict[str, Any]) -> float:
         """
-        Trả về số tiền nộp (dương = nộp vào NSNN, âm = hủy/điều chỉnh giảm số nộp).
-        Bảo toàn tuyệt đối dấu đại số của giao dịch C2, NT, HC trên Sổ Tổng Quan (TQ)
-        (tuyệt đối không dùng abs() làm mất dấu âm của chứng từ điều chỉnh/chứng từ âm BK).
+        Trả về số tiền nộp (dương = nộp vào NSNN, âm = hủy/hoàn trả/điều chỉnh giảm số nộp).
+        Bảo toàn tuyệt đối dấu đại số của giao dịch C2, NT, HC, C5 trên Sổ Tổng Quan (TQ)
+        (tuyệt đối không dùng abs() làm mất dấu âm của chứng từ điều chỉnh/chứng từ âm BK/lệnh hoàn C5).
         """
         val = item["so_tien"]
         no_co = item.get("no_co", "")
         if no_co in ("C", "N") and not c2_is_negative and val >= 0:
             return val if no_co == "C" else -val
         return -val if c2_is_negative else val
+
+    def ledger_signed_amount(item: Dict[str, Any]) -> float:
+        """
+        Quy đổi số tiền giao dịch về dấu chuẩn Sổ Tổng Quan TMS (+ tăng nợ phải nộp, - giảm nợ / đã nộp).
+        """
+        val = item["so_tien"]
+        no_co = item.get("no_co", "")
+        if no_co in ("C", "N") and not c2_is_negative and val >= 0:
+            return val if no_co == "N" else -val
+        return val
+
+    payment_gds = ("C2", "HC", "NT", "C5")
 
     for item in tq_rows:
         tm = item["tm"]
@@ -190,7 +204,11 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         ht_y = item["ht_year"]
         val = item["so_tien"]
 
-        # 1. Đầu kỳ (Kỳ báo cáo < start_year nhưng Ngày hạch toán trong kỳ kiểm tra start_year..end_year)
+        # Bỏ qua bút toán bù trừ nội bộ (BT) vì mỗi cặp BT luôn tự triệt tiêu về 0
+        if gd == "BT":
+            continue
+
+        # 1. Ghi nhận chi tiết thuyết minh đầu kỳ (Kỳ báo cáo < start_year nhưng hạch toán trong kỳ kiểm tra)
         if ky_y is not None and ky_y < start_year and start_year <= ht_y <= end_year:
             if tm == "1701":
                 if gd == "QT":
@@ -215,16 +233,20 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                 elif gd == "C2" and ky_y == prev_year:
                     metrics["dk_tndn_i"] += payment_amount(item)
 
-        # 2. Phát sinh theo Năm Kỳ báo cáo
+        # 2. Phát sinh theo Năm Kỳ báo cáo (Bucket A)
+        in_bucket_a = False
         if ky_y in years:
             if tm == "1701" and gd == "TK":
                 metrics["gtgt_tk_by_ky"][ky_y] += val
+                in_bucket_a = True
                 if ky:
                     metrics["gtgt_tk_periods"][ky_y].add(ky)
             elif tm == "1052" and gd in ("TK", "TQ", "QT"):
                 metrics["tndn_tk_qt_by_ky"][ky_y] += val
+                in_bucket_a = True
             elif tm == "1001" and gd in ("TK", "TH", "TQ"):
                 metrics["tncn_tk_th_tq_by_ky"][ky_y] += val
+                in_bucket_a = True
                 if gd == "TK" and ky:
                     metrics["tncn_tk_periods"][ky_y].add(ky)
 
@@ -233,21 +255,34 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
             elif tm == "1001" and gd == "C2" and ky:
                 metrics["tncn_c2_periods"][ky_y].add(ky)
 
-        # 3. Số đã nộp C2 (+ HC, NT nếu có xử lý chứng từ nộp/chứng từ âm BK) theo Năm Ngày hạch toán
-        if ht_y in years and gd in ("C2", "HC", "NT"):
+        # 3. Số đã nộp C2 (+ HC, NT, C5 hoàn nộp thừa) theo Năm Ngày hạch toán (Bucket B)
+        in_bucket_b = False
+        if ht_y in years and gd in payment_gds:
             p_amt = payment_amount(item)
             if tm == "1701":
                 metrics["gtgt_c2_by_ht"][ht_y] += p_amt
-                if gd in ("HC", "NT"):
+                in_bucket_b = True
+                if gd in ("HC", "NT", "C5"):
                     metrics.setdefault("special_nop_notes", defaultdict(list))[("1701", ht_y)].append(f"{gd}: {p_amt:,.0f}")
             elif tm == "1052":
                 metrics["tndn_c2_by_ht"][ht_y] += p_amt
-                if gd in ("HC", "NT"):
+                in_bucket_b = True
+                if gd in ("HC", "NT", "C5"):
                     metrics.setdefault("special_nop_notes", defaultdict(list))[("1052", ht_y)].append(f"{gd}: {p_amt:,.0f}")
             elif tm == "1001":
                 metrics["tncn_c2_by_ht"][ht_y] += p_amt
-                if gd in ("HC", "NT"):
+                in_bucket_b = True
+                if gd in ("HC", "NT", "C5"):
                     metrics.setdefault("special_nop_notes", defaultdict(list))[("1001", ht_y)].append(f"{gd}: {p_amt:,.0f}")
+
+        # 4. Bucket C: Toàn bộ giao dịch kỳ trước chuyển sang (không thuộc Bucket A & B và không vượt quá end_year)
+        if tm in ("1701", "1052", "1001") and not in_bucket_a and not in_bucket_b:
+            if gd in payment_gds:
+                if ht_y < start_year:
+                    metrics["opening_exact"][tm] += ledger_signed_amount(item)
+            else:
+                if (ky_y is not None and ky_y < start_year) or (ky_y in years and ht_y <= end_year):
+                    metrics["opening_exact"][tm] += ledger_signed_amount(item)
 
     return metrics
 
@@ -628,7 +663,8 @@ def integrate_tq_and_qhns_into_workbook(
         r_g = this_rows["gtgt"]
         if y_idx == 0:
             h_val = round(metrics["dk_gtgt_qt_truoc"])
-            i_val = round(metrics["dk_gtgt_c2_prev"])
+            open_gtgt = round(metrics["opening_exact"]["1701"])
+            i_val = open_gtgt - h_val
             ws_q.cell(r_g, 8, h_val).number_format = num_fmt
             ws_q.cell(r_g, 9, i_val).number_format = num_fmt
             ws_q.cell(r_g, 8).font = font_regular
@@ -637,8 +673,16 @@ def integrate_tq_and_qhns_into_workbook(
                 qt_note = ", ".join(metrics["dk_gtgt_qt_notes"]) or f"QT kỳ trước nộp trong kỳ kiểm tra"
                 ws_q.cell(r_g, 8).comment = Comment(f"Số nộp của {qt_note}", "QHNS")
             if i_val != 0:
+                c2_prev = round(metrics["dk_gtgt_c2_prev"])
                 c2_note = ", ".join(metrics["dk_gtgt_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
-                ws_q.cell(r_g, 9).comment = Comment(f"Số nộp tháng {c2_note}", "QHNS")
+                extra = i_val - c2_prev
+                if extra != 0:
+                    ws_q.cell(r_g, 9).comment = Comment(
+                        f"Số dư đầu kỳ trước chuyển sang ({i_val:,.0f}): gồm nộp tháng {c2_note} ({c2_prev:,.0f}) và dư lũy kế kỳ trước ({extra:+,.0f})",
+                        "QHNS",
+                    )
+                else:
+                    ws_q.cell(r_g, 9).comment = Comment(f"Số nộp tháng {c2_note}", "QHNS")
             ws_q.cell(r_g, 3, f"=H{r_g}+I{r_g}")
         else:
             ws_q.cell(r_g, 3, f"=G{prev_rows['gtgt']}")
@@ -681,10 +725,21 @@ def integrate_tq_and_qhns_into_workbook(
         # 3) Thuế TNDN
         r_td = this_rows["tndn"]
         if y_idx == 0:
-            dk_td = round(metrics["dk_tndn_h"] + metrics["dk_tndn_i"])
-            if dk_td != 0:
-                ws_q.cell(r_td, 8, round(metrics["dk_tndn_h"])).number_format = num_fmt
-                ws_q.cell(r_td, 9, round(metrics["dk_tndn_i"])).number_format = num_fmt
+            h_td = round(metrics["dk_tndn_h"])
+            open_td = round(metrics["opening_exact"]["1052"])
+            i_td = open_td - h_td
+            if open_td != 0 or h_td != 0:
+                ws_q.cell(r_td, 8, h_td).number_format = num_fmt
+                ws_q.cell(r_td, 9, i_td).number_format = num_fmt
+                ws_q.cell(r_td, 8).font = font_regular
+                ws_q.cell(r_td, 9).font = font_regular
+                if h_td != 0:
+                    ws_q.cell(r_td, 8).comment = Comment("QĐ truy thu TNDN kỳ trước nộp trong kỳ kiểm tra", "QHNS")
+                if i_td != 0:
+                    ws_q.cell(r_td, 9).comment = Comment(
+                        f"Số dư đầu kỳ TNDN (1052) kỳ trước chuyển sang theo Sổ Tổng Quan ({i_td:,.0f})",
+                        "QHNS",
+                    )
                 ws_q.cell(r_td, 3, f"=H{r_td}+I{r_td}")
         else:
             ws_q.cell(r_td, 3, f"=G{prev_rows['tndn']}")
@@ -723,7 +778,8 @@ def integrate_tq_and_qhns_into_workbook(
         r_tn = this_rows["tncn"]
         if y_idx == 0:
             h_tn = round(metrics["dk_tncn_c2_prev"])
-            i_tn = round(metrics["dk_tncn_qt_prev"])
+            open_tn = round(metrics["opening_exact"]["1001"])
+            i_tn = open_tn - h_tn
             ws_q.cell(r_tn, 8, h_tn).number_format = num_fmt
             ws_q.cell(r_tn, 9, i_tn).number_format = num_fmt
             ws_q.cell(r_tn, 8).font = font_regular
@@ -732,7 +788,15 @@ def integrate_tq_and_qhns_into_workbook(
                 c2_tn_note = ", ".join(metrics["dk_tncn_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
                 ws_q.cell(r_tn, 8).comment = Comment(f"Kỳ kk {c2_tn_note} - Số nộp", "QHNS")
             if i_tn != 0:
-                ws_q.cell(r_tn, 9).comment = Comment(f"Số nộp thừa trên QT {start_year - 1} (TQ + TH)", "QHNS")
+                qt_prev = round(metrics["dk_tncn_qt_prev"])
+                extra_tn = i_tn - qt_prev
+                if extra_tn != 0:
+                    ws_q.cell(r_tn, 9).comment = Comment(
+                        f"Số dư kỳ trước chuyển sang ({i_tn:,.0f}): gồm QT {start_year - 1} ({qt_prev:,.0f}) và dư lũy kế kỳ trước ({extra_tn:+,.0f})",
+                        "QHNS",
+                    )
+                else:
+                    ws_q.cell(r_tn, 9).comment = Comment(f"Số nộp thừa trên QT {start_year - 1} (TQ + TH)", "QHNS")
             ws_q.cell(r_tn, 3, f"=H{r_tn}+I{r_tn}")
         else:
             ws_q.cell(r_tn, 3, f"=G{prev_rows['tncn']}")

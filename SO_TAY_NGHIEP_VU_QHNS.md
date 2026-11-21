@@ -73,3 +73,13 @@ Số đầu kỳ của giai đoạn kiểm tra (`2020–2025`) bao gồm toàn b
   - **Thuế GTGT (`G45`):** `57,285,642`.
   - **Thuế TNCN (`G48`):** `940,214,600`.
   - Tại ô **`H48 = G48 - E24`** (`= 940,214,600 - 835,803,026 = 104,411,574`): Đối chiếu ngược lại số dư nghĩa vụ năm tài chính 2025 trên Sổ Tổng Quan `TQ` khi chưa cộng khoản xử lý qua thanh tra `E24` (`142,616,473 [TK 2512] - 37,204,969 [TQ 25CN] - 999,930 = 104,411,574`), đảm bảo khớp 100% đến từng đồng!
+
+
+---
+### Bổ sung Quy tắc Chuẩn hóa Số dư Đầu kỳ Tuyệt đối & Lệnh hoàn `C5`
+1. **Luôn loại bỏ bút toán bù trừ nội bộ (`Ký hiệu giao dịch = BT`)**: `BT` luôn đi theo cặp Âm–Dương triệt tiêu nhau để tất toán công nợ trên TMS, tuyệt đối không tính vào phát sinh hay số đã nộp.
+2. **Công thức Phân hoạch 3 nhóm (A/B/C) bảo toàn 100% Số dư cuối kỳ `QHNS` = `TQ`**:
+   - **Nhóm A (Phát sinh trong kỳ kiểm tra `start_year..end_year`):** `TK` (GTGT `1701`), `TK/TQ/QT` (TNDN `1052`), `TK/TH/TQ` (TNCN `1001`) theo năm Kỳ báo cáo.
+   - **Nhóm B (Số đã nộp / Hoàn trả trong kỳ kiểm tra `start_year..end_year`):** `C2`, `HC`, `NT`, **`C5` (Lệnh hoàn KBT thu NS — ghi âm giảm số nộp)** theo năm Ngày hạch toán, bảo toàn dấu đại số.
+   - **Nhóm C (Số kỳ trước chuyển sang = Dư đầu kỳ `start_year`):** Toàn bộ giao dịch khác `BT` của tiểu mục không thuộc Nhóm A & B (và không vượt quá `end_year`), bao gồm số nộp thừa/còn nợ lũy kế từ các năm trước (`< start_year`), các tờ khai/QĐ truy thu kỳ trước hạch toán muộn (`1901 TK`, `15CN QT`), và các cặp `PT`/`QH` bù trừ hoàn.
+   - Khi tách ra cột thuyết minh `H` & `I` của năm đầu tiên, luôn giữ `H + I = Tổng Nhóm C` để đảm bảo **Dư cuối kỳ `QHNS` khớp tuyệt đối 0 đồng chênh lệch với Sổ Tổng Quan (`TQ`)** cho cả 3 sắc thuế (GTGT, TNDN, TNCN).
