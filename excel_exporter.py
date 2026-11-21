@@ -2681,7 +2681,7 @@ def write_yearly_verification_sheets(
     font_italic = Font(name="Times New Roman", size=11, italic=True)
 
     bold_rows = {
-        1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        1, 4, 11, 14, 18, 22, 23, 24,
         27, 29, 48, 56, 63, 76, 81, 83, 90, 93, 95, 96,
     }
     italic_rows = {97, 98}

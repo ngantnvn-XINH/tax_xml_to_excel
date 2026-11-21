@@ -12,9 +12,10 @@
    - **Thuế GTGT (Tiểu mục `1701`):** Số phát sinh trên `TQ` lấy giao dịch **`TK`** theo **Kỳ báo cáo** của từng năm.
    - **Thuế TNDN (Tiểu mục `1052`):** Số phát sinh trên `TQ` lấy giao dịch **`TK`, `QT`** theo **Kỳ báo cáo** của từng năm.
    - **Thuế TNCN từ tiền lương, tiền công (Tiểu mục `1001`):** Số phát sinh trên `TQ` lấy tổng giao dịch **`TK`, `TH`, `TQ`** của đúng Tiểu mục **`1001`** theo **Kỳ báo cáo** của từng năm (không trộn tiểu mục `1015` hay `1004`).
-   - **Số đã nộp ngân sách – Cột (6):** Chỉ lấy giao dịch **`C2`** theo **Năm Ngày hạch toán** (trường hợp đặc biệt có hủy chứng từ nộp tiền thì lấy thêm giao dịch **`HC`**). Tuyệt đối không lấy `PT`, `QH`, `C5`, `KT`.
-4. **Quy tắc xử lý chuỗi `Kỳ báo cáo` trên `TQ`:**
-   - Các kỳ tháng của năm 2020 có định dạng `YYMM` là `"2001"` đến `"2012"`. Khi lập trình trích xuất năm của `Kỳ báo cáo`, bắt buộc kiểm tra mẫu `^(\d{2})(0[1-9]|1[0-2]|Q\d|CN)$` trước tiên để `"2001".."2012"` trả về năm **`2020`** (tránh lỗi regex `20\d{2}` nhận nhầm thành các năm `2001..2012`).
+   - **Số đã nộp ngân sách – Cột (6):** Lấy giao dịch **`C2`** theo **Năm Ngày hạch toán**, đồng thời ghi nhận cả các giao dịch điều chỉnh chứng từ nộp đặc biệt gồm **`HC`** (Hủy chứng từ) và **`NT`** (ví dụ `NT XU LY CTU AM BK NGAY ...` – xử lý chứng từ âm bảng kê) theo đúng năm ngày hạch toán và dấu đại số trên `TQ`. Tuyệt đối không lấy `PT`, `QH`, `C5`, `KT`.
+4. **Quy tắc xử lý năm tính thuế & chuỗi `Kỳ báo cáo`:**
+   - **Tờ khai XML (`03/TNDN`, `BCTC` có năm tài chính lệch năm dương lịch):** Bắt buộc lấy năm tính thuế ưu tiên tuyệt đối theo thẻ **`<kyKKhai>`** trước (tuyệt đối không lấy `den_ngay.year` trước `kyKKhai`) để năm `2020` (VD: `01/04/2020–31/03/2021`) không bị đẩy nhầm sang bảng năm `2021`.
+   - **Trên Sổ Tổng Quan (`TQ`):** Các kỳ tháng của năm 2020 có định dạng `YYMM` là `"2001"` đến `"2012"`. Khi lập trình trích xuất năm của `Kỳ báo cáo`, bắt buộc kiểm tra mẫu `^(\d{2})(0[1-9]|1[0-2]|Q\d|CN)$` trước tiên để `"2001".."2012"` trả về năm **`2020`** (tránh lỗi regex `20\d{2}` nhận nhầm thành các năm `2001..2012`).
 
 ---
 
@@ -27,7 +28,12 @@ Tại mỗi sheet năm (`2020`, `2021`, `2022`, `2023`, `2024`, `2025`), thiết
 - **`F23`** *(Comment: "Phát sinh TK trên tổng quan")*: Tổng giao dịch `TK` (Tiểu mục `1701`) theo Kỳ báo cáo thuộc năm đó trên `TQ`.
 - **`G23` (`=C23-F23`):** Chênh lệch giữa Tờ khai và Tổng quan `TQ`.
 
-### 2.2. Dòng 90 (`Tổng hợp tổng số thuế TNCN phải khấu trừ`)
+### 2.2. Dòng 76 (`Mục D: Thuế TNDN phải nộp trong kỳ`)
+- **`C76`:** Số báo cáo của người nộp thuế (`=SUM(C77:C79)`).
+- **`F76`** *(Comment: "Phát sinh TK; QT trên tổng quan")*: Tổng giao dịch `TK + QT` (Tiểu mục `1052`) theo Kỳ báo cáo thuộc năm đó trên `TQ`.
+- **`G76` (`=C76-F76`):** Chênh lệch giữa Tờ khai Quyết toán TNDN và Tổng quan `TQ`.
+
+### 2.3. Dòng 90 (`Tổng hợp tổng số thuế TNCN phải khấu trừ`)
 - **`C90` (`=C85+C87+C89`):** Tổng số thuế TNCN phải khấu trừ trên Tờ khai Quyết toán `05/QTT-TNCN` (tổng hợp từ `05-1/BK` lũy tiến + `05-1/BK` toàn phần 10% + `05-2/BK` không cư trú 20%).
 - **`F90`** *(Comment: "Phát sinh TK; TH; TQ trên tổng quan")*: Tổng giao dịch `TK + TH + TQ` (Tiểu mục `1001`) theo Kỳ báo cáo thuộc năm đó trên `TQ`.
 - **`G90` (`=C90-F90`):** Chênh lệch giữa Tờ khai Quyết toán TNCN và Phát sinh trên Tổng quan `TQ`.

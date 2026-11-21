@@ -290,19 +290,26 @@ class TaxDeclaration:
 
     @property
     def year(self) -> Optional[int]:
-        """Lấy năm tính thuế của tờ khai."""
-        if self.den_ngay:
-            return self.den_ngay.year
-        if self.tu_ngay:
-            return self.tu_ngay.year
+        """
+        Lấy năm tính thuế của tờ khai.
+        QUAN TRỌNG: Ưu tiên tuyệt đối thẻ <kyKKhai> trước (VD: '2020', '01/2020', 'Q1/2020')
+        để doanh nghiệp có năm tài chính lệch năm dương lịch (VD: 01/04/2020 - 31/03/2021, kyKKhai='2020')
+        KHÔNG BAO GIỜ bị đẩy nhầm sang năm 2021.
+        """
         if self.ky_kkhai:
-            m = re.search(r"\b(19\d\d|20\d\d)\b", self.ky_kkhai)
+            s_ky = str(self.ky_kkhai).strip().upper()
+            # Dạng 4 chữ số năm: '2020', '01/2020', 'Q1/2020'
+            m = re.search(r"(19\d\d|20\d\d)", s_ky)
             if m:
                 return int(m.group(1))
-            # Hỗ trợ dạng kỳ viết tắt 2301, 2401... (năm 2023, 2024)
-            m2 = re.search(r"\b(2\d)(0[1-9]|1[0-2])\b", self.ky_kkhai)
+            # Hỗ trợ dạng kỳ viết tắt YYMM / YYQ# / YYCN (VD: 2001..2012 -> 2020, 2301 -> 2023)
+            m2 = re.match(r"^(\d{2})(0[1-9]|1[0-2]|Q\d|CN)$", s_ky)
             if m2:
                 return 2000 + int(m2.group(1))
+        if self.tu_ngay:
+            return self.tu_ngay.year
+        if self.den_ngay:
+            return self.den_ngay.year
         if self.ngay_lap:
             return self.ngay_lap.year
         return None

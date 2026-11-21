@@ -230,15 +230,21 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
             elif tm == "1001" and gd == "C2" and ky:
                 metrics["tncn_c2_periods"][ky_y].add(ky)
 
-        # 3. Số đã nộp C2 (+ HC nếu có hủy chứng từ) theo Năm Ngày hạch toán
-        if ht_y in years and gd in ("C2", "HC"):
+        # 3. Số đã nộp C2 (+ HC, NT nếu có xử lý chứng từ nộp/chứng từ âm BK) theo Năm Ngày hạch toán
+        if ht_y in years and gd in ("C2", "HC", "NT"):
             p_amt = payment_amount(item)
             if tm == "1701":
                 metrics["gtgt_c2_by_ht"][ht_y] += p_amt
+                if gd in ("HC", "NT"):
+                    metrics.setdefault("special_nop_notes", defaultdict(list))[("1701", ht_y)].append(f"{gd}: {p_amt:,.0f}")
             elif tm == "1052":
                 metrics["tndn_c2_by_ht"][ht_y] += p_amt
+                if gd in ("HC", "NT"):
+                    metrics.setdefault("special_nop_notes", defaultdict(list))[("1052", ht_y)].append(f"{gd}: {p_amt:,.0f}")
             elif tm == "1001":
                 metrics["tncn_c2_by_ht"][ht_y] += p_amt
+                if gd in ("HC", "NT"):
+                    metrics.setdefault("special_nop_notes", defaultdict(list))[("1001", ht_y)].append(f"{gd}: {p_amt:,.0f}")
 
     return metrics
 
@@ -436,12 +442,14 @@ def integrate_tq_and_qhns_into_workbook(
 
     # Lưu trạng thái thiếu tờ khai trên TQ theo từng năm để quyết định công thức Cột (4) & Cột (5) trên QHNS
     gtgt_missing_info: Dict[int, Optional[str]] = {}
+    tndn_missing_info: Dict[int, Optional[str]] = {}
     tncn_missing_info: Dict[int, Optional[str]] = {}
 
     for y in years:
         sname = str(y)
         if sname not in wb.sheetnames:
             gtgt_missing_info[y] = None
+            tndn_missing_info[y] = None
             tncn_missing_info[y] = None
             continue
         ws_y = wb[sname]
@@ -467,6 +475,26 @@ def integrate_tq_and_qhns_into_workbook(
         else:
             ws_y["F23"].comment = Comment("Phát sinh TK trên tổng quan", "QHNS")
             gtgt_missing_info[y] = None
+
+        # --- Dòng 76: Thuế TNDN phải nộp trong kỳ ---
+        f76_val = round(metrics["tndn_tk_qt_by_ky"][y])
+        c76_val = round(decl_vals[y]["tndn_c76"])
+        diff_tndn = c76_val - f76_val
+
+        ws_y["F76"].value = f76_val
+        ws_y["F76"].number_format = num_fmt
+        ws_y["F76"].font = font_bold
+        ws_y["G76"].value = "=C76-F76"
+        ws_y["G76"].number_format = num_fmt
+        ws_y["G76"].font = font_bold
+
+        if diff_tndn > 1000:
+            ws_y["F76"].comment = Comment(f"Phát sinh TK; QT trên tổng quan (chênh lệch {diff_tndn:,.0f} so với tờ khai TNDN)", "QHNS")
+            tndn_missing_info[y] = f"TNDN {y}"
+            alerts.append(f"Năm {y} - Thuế TNDN: Tờ khai ({c76_val:,.0f}) > Tổng quan ({f76_val:,.0f}), chênh lệch {diff_tndn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra.")
+        else:
+            ws_y["F76"].comment = Comment("Phát sinh TK; QT trên tổng quan", "QHNS")
+            tndn_missing_info[y] = None
 
         # --- Dòng 90: Tổng hợp tổng số thuế TNCN phải khấu trừ ---
         f90_val = round(metrics["tncn_tk_th_tq_by_ky"][y])
@@ -549,6 +577,8 @@ def integrate_tq_and_qhns_into_workbook(
     prev_rows: Dict[str, int] = {}
     tncn_e_cells: List[str] = []
     gtgt_e_cells: List[str] = []
+    tndn_e_cells: List[str] = []
+    special_nop_notes = metrics.get("special_nop_notes", {})
     cur_r = 4
 
     for y_idx, y in enumerate(years):
@@ -629,8 +659,14 @@ def integrate_tq_and_qhns_into_workbook(
             ws_q.cell(r_g, 4, round(metrics["gtgt_tk_by_ky"][y]))
 
         ws_q.cell(r_g, 6, round(metrics["gtgt_c2_by_ht"][y]))
-        if y_idx == 0:
-            ws_q.cell(r_g, 6).comment = Comment("GD C2 theo ngày hạch toán trên tổng quan", "QHNS")
+        gtgt_sp_notes = special_nop_notes.get(("1701", y), [])
+        if gtgt_sp_notes:
+            ws_q.cell(r_g, 6).comment = Comment(
+                "GD C2 + NT/HC theo ngày hạch toán trên tổng quan (bao gồm: " + "; ".join(gtgt_sp_notes) + ")",
+                "QHNS",
+            )
+        elif y_idx == 0:
+            ws_q.cell(r_g, 6).comment = Comment("GD C2 (và NT/HC nếu có) theo ngày hạch toán trên tổng quan", "QHNS")
         ws_q.cell(r_g, 7, f"=C{r_g}+D{r_g}+E{r_g}-F{r_g}")
 
         # 2) Thuế GTGT vãng lai
@@ -652,12 +688,32 @@ def integrate_tq_and_qhns_into_workbook(
 
         tndn_ps = round(metrics["tndn_tk_qt_by_ky"][y])
         tndn_nop = round(metrics["tndn_c2_by_ht"][y])
-        if has_sheet and round(decl_vals[y]["tndn_c76"]) > 0:
-            ws_q.cell(r_td, 4, f"='{sname}'!C76")
+        if has_sheet:
+            if tndn_missing_info.get(y):
+                ws_q.cell(r_td, 4, f"='{sname}'!F76")
+                ws_q.cell(r_td, 4).comment = Comment(
+                    "Số phát sinh TNDN đã ghi nhận trên tổng quan (TK; QT)",
+                    "QHNS",
+                )
+                ws_q.cell(r_td, 5, f"='{sname}'!G76")
+                ws_q.cell(r_td, 5).comment = Comment(
+                    "Số chênh lệch thực tế giữa tờ khai TNDN và phát sinh trên tổng quan",
+                    "QHNS",
+                )
+                tndn_e_cells.append(f"E{r_td}")
+            elif round(decl_vals[y]["tndn_c76"]) > 0 or tndn_ps > 0:
+                ws_q.cell(r_td, 4, f"='{sname}'!C76")
         elif tndn_ps > 0:
             ws_q.cell(r_td, 4, tndn_ps)
+
         if tndn_nop != 0:
             ws_q.cell(r_td, 6, tndn_nop)
+            tndn_sp_notes = special_nop_notes.get(("1052", y), [])
+            if tndn_sp_notes:
+                ws_q.cell(r_td, 6).comment = Comment(
+                    "GD C2 + NT/HC theo ngày hạch toán trên tổng quan (bao gồm: " + "; ".join(tndn_sp_notes) + ")",
+                    "QHNS",
+                )
         ws_q.cell(r_td, 7, f"=C{r_td}+D{r_td}+E{r_td}-F{r_td}")
 
         # 4) Thuế TNCN
@@ -697,6 +753,12 @@ def integrate_tq_and_qhns_into_workbook(
             ws_q.cell(r_tn, 4, round(metrics["tncn_tk_th_tq_by_ky"][y]))
 
         ws_q.cell(r_tn, 6, round(metrics["tncn_c2_by_ht"][y]))
+        tncn_sp_notes = special_nop_notes.get(("1001", y), [])
+        if tncn_sp_notes:
+            ws_q.cell(r_tn, 6).comment = Comment(
+                "GD C2 + NT/HC theo ngày hạch toán trên tổng quan (bao gồm: " + "; ".join(tncn_sp_notes) + ")",
+                "QHNS",
+            )
         ws_q.cell(r_tn, 7, f"=C{r_tn}+D{r_tn}+E{r_tn}-F{r_tn}")
 
         # 5) Thuế nhà thầu (Tổng + GTGT + TNDN)
@@ -726,6 +788,14 @@ def integrate_tq_and_qhns_into_workbook(
                 ws_q.cell(r_g, 8, f"=G{r_g}-{expr}").number_format = num_fmt
                 ws_q.cell(r_g, 8).font = font_bold
                 ws_q.cell(r_g, 8).comment = Comment(
+                    "Đối chiếu số dư cuối kỳ trên Sổ Tổng Quan (chưa cộng số xử lý qua thanh tra Cột 5)",
+                    "QHNS",
+                )
+            if tndn_e_cells:
+                expr = "-".join(tndn_e_cells)
+                ws_q.cell(r_td, 8, f"=G{r_td}-{expr}").number_format = num_fmt
+                ws_q.cell(r_td, 8).font = font_bold
+                ws_q.cell(r_td, 8).comment = Comment(
                     "Đối chiếu số dư cuối kỳ trên Sổ Tổng Quan (chưa cộng số xử lý qua thanh tra Cột 5)",
                     "QHNS",
                 )
