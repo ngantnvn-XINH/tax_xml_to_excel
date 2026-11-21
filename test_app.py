@@ -528,6 +528,23 @@ class TestTaxXmlToExcel(unittest.TestCase):
                 [1, "Dương Thủy Nguyên", "8348315370", "Lý Thị Loan", "1960-09-11", "8867960913", "Thẻ CCCD", "094160009275", "Cha/mẹ", "02/2023", "12/2023"],
             )
 
+            # Kiểm tra bảng dữ liệu tổng hợp thứ 2 trên sheet TK (dòng 38..47) lấy từ sheet 05-1 và 05-2
+            ws_tk = wb["TK"]
+            self.assertEqual(ws_tk.cell(38, 2).value, "STT")
+            self.assertEqual(ws_tk.cell(38, 3).value, "Chỉ tiêu")
+            self.assertEqual(ws_tk.cell(38, 4).value, "Số báo cáo của người nộp thuế")
+            self.assertEqual(ws_tk.cell(38, 5).value, "Số kiểm tra")
+            self.assertEqual(ws_tk.cell(38, 6).value, "Chênh lệch")
+            self.assertEqual(ws_tk.cell(40, 2).value, "I")
+            self.assertEqual(ws_tk.cell(41, 4).value, "='05-1'!H5")
+            self.assertEqual(ws_tk.cell(42, 4).value, "='05-1'!R5-'05-1'!U5+'05-1'!V5")
+            self.assertEqual(ws_tk.cell(43, 4).value, "='05-2'!G5")
+            self.assertEqual(ws_tk.cell(44, 4).value, "='05-2'!K5")
+            self.assertEqual(ws_tk.cell(45, 4).value, "='05-2'!G6")
+            self.assertEqual(ws_tk.cell(46, 4).value, "='05-2'!K6")
+            self.assertEqual(ws_tk.cell(47, 2).value, "Tổng hợp tổng số thuế TNCN phải khấu trừ")
+            self.assertEqual(ws_tk.cell(47, 4).value, "=D42+D44+D46")
+
     def test_v12_bctc_subcodes_and_other_declarations(self) -> None:
         """Kiểm thử v1.2: BCTC mã con 411a/411b không ghi đè mã cha 411 và xuất tờ khai Khác (01/LPMB)."""
         xml_bctc = """<?xml version="1.0" encoding="UTF-8"?>

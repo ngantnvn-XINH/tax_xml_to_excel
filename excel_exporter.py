@@ -788,6 +788,7 @@ def write_sheet_tncn_master(
     wb: openpyxl.Workbook,
     declarations: List[TaxDeclaration],
     existing_sheets: Set[str],
+    include_appendices: bool = True,
 ) -> None:
     """
     Xuất tờ khai quyết toán TNCN của tất cả các năm vào DUY NHẤT 1 SHEET 'TNCN' trong file tổng hợp.
@@ -972,6 +973,158 @@ def write_sheet_tncn_master(
         for i in range(len(decls_80)):
             ws.column_dimensions[get_column_letter(c_80_start + 4 + i)].width = 15
 
+    # 3. BẢNG TỔNG HỢP ĐỐI CHIẾU TỪ SHEET '05-1' VÀ '05-2' (Dòng 38..47) TRÊN SHEET 'TNCN'
+    r051_map: Dict[int, int] = {}
+    r052_map: Dict[int, Tuple[int, int]] = {}
+    if include_appendices:
+        if len(latest_tncn) == 1:
+            d0 = latest_tncn[0]
+            n1 = sum(len(r) for k, r in d0.appendices.items() if any(t in k.upper() for t in ("05_1", "05-1", "051")))
+            n2 = sum(len(r) for k, r in d0.appendices.items() if any(t in k.upper() for t in ("05_2", "05-2", "052")))
+            if n1 > 0:
+                r051_map[id(d0)] = 4 + n1
+            if n2 > 0:
+                r052_map[id(d0)] = (4 + n2 + 1, 4 + n2 + 2)
+        else:
+            cur1 = 4
+            for d_item in latest_tncn:
+                n1 = sum(len(r) for k, r in d_item.appendices.items() if any(t in k.upper() for t in ("05_1", "05-1", "051")))
+                if n1 > 0:
+                    cur1 += 1 + n1
+                    r051_map[id(d_item)] = cur1
+                    cur1 += 1
+            cur2 = 4
+            for d_item in latest_tncn:
+                n2 = sum(len(r) for k, r in d_item.appendices.items() if any(t in k.upper() for t in ("05_2", "05-2", "052")))
+                if n2 > 0:
+                    cur2 += 1 + n2
+                    r052_map[id(d_item)] = (cur2 + 1, cur2 + 2)
+                    cur2 += 3
+
+    tnr_bold = Font(name="Times New Roman", size=10, bold=True)
+    tnr_reg = Font(name="Times New Roman", size=10, bold=False)
+    yellow_hl = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+
+    blocks_to_write: List[Tuple[int, List[TaxDeclaration]]] = []
+    if decls_156:
+        blocks_to_write.append((3, decls_156))
+    if decls_80:
+        b80_start = (3 + 3 + len(decls_156) + 2) if decls_156 else 3
+        blocks_to_write.append((b80_start, decls_80))
+
+    ws.row_dimensions[38].height = 25.5
+    for r_num in range(41, 47):
+        ws.row_dimensions[r_num].height = 26.25
+
+    summary_rows_spec = [
+        (41, 1, "Thu nhập từ tiền lương, tiền công của cá nhân cư trú tính thuế theo biểu thuế lũy tiến từng phần "),
+        (42, 2, "Thuế TNCN từ tiền lương, tiền công của cá nhân cư trú tính thuế theo biểu thuế lũy tiến từng phần đã khấu trừ"),
+        (43, 3, "Thu nhập từ tiền lương, tiền công của cá nhân cư trú tính thuế theo thuế suất toàn phần 10% "),
+        (44, 4, "Thuế TNCN từ tiền lương, tiền công của cá nhân cư trú tính thuế theo thuế suất toàn phần 10% đã khấu trừ"),
+        (45, 5, "Thu nhập từ tiền lương, tiền công của cá nhân  không cư trú"),
+        (46, 6, "Thuế TNCN từ tiền lương, tiền công của cá nhân không cư trú tính theo thuế suất 20% đã khấu trừ"),
+    ]
+
+    for b_start, b_decls in blocks_to_write:
+        b_end = b_start + 3 + len(b_decls)
+        # Dòng 38: Tiêu đề
+        ws.cell(38, b_start, "STT")
+        ws.cell(38, b_start + 1, "Chỉ tiêu")
+        ws.cell(38, b_start + 2, "Mã chỉ tiêu")
+        ws.cell(38, b_start + 3, "Đơn vị tính")
+        for i, d_item in enumerate(b_decls):
+            ws.cell(38, b_start + 4 + i, f"Số báo cáo ({d_item.year or d_item.ky_kkhai})")
+        for c_i in range(b_start, b_end + 1):
+            c38 = ws.cell(38, c_i)
+            c38.font = tnr_bold
+            c38.fill = GRAY_HEADER_FILL
+            c38.border = THIN_BORDER
+            c38.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        # Dòng 39: Mã cột
+        ws.cell(39, b_start, -1)
+        ws.cell(39, b_start + 1, -2)
+        ws.cell(39, b_start + 2, "")
+        ws.cell(39, b_start + 3, "")
+        for i in range(len(b_decls)):
+            ws.cell(39, b_start + 4 + i, -3)
+        for c_i in range(b_start, b_end + 1):
+            c39 = ws.cell(39, c_i)
+            c39.font = tnr_reg
+            c39.border = THIN_BORDER
+            c39.alignment = Alignment(horizontal="center", vertical="center")
+            if isinstance(c39.value, int):
+                c39.number_format = "0_);(0)"
+
+        # Dòng 40: Mục I
+        ws.cell(40, b_start, "I").font = tnr_bold
+        ws.cell(40, b_start).alignment = Alignment(horizontal="center", vertical="center")
+        ws.cell(40, b_start + 1, "Thuế TNCN từ tiền lương, tiền công ").font = tnr_bold
+        ws.merge_cells(start_row=40, start_column=b_start + 1, end_row=40, end_column=b_end)
+        for c_i in range(b_start, b_end + 1):
+            ws.cell(40, c_i).border = THIN_BORDER
+            ws.cell(40, c_i).fill = SECTION_FILL
+
+        # Dòng 41..46: 6 chỉ tiêu
+        for r_num, stt_num, lbl_text in summary_rows_spec:
+            c_stt = ws.cell(r_num, b_start, stt_num)
+            c_stt.font = tnr_reg
+            c_stt.alignment = Alignment(horizontal="center", vertical="center")
+            c_stt.border = THIN_BORDER
+
+            c_lbl = ws.cell(r_num, b_start + 1, lbl_text)
+            c_lbl.font = tnr_reg
+            c_lbl.alignment = Alignment(horizontal="justify", vertical="center", wrap_text=True)
+            c_lbl.border = THIN_BORDER
+
+            c_code = ws.cell(r_num, b_start + 2, "")
+            c_code.font = tnr_reg
+            c_code.border = THIN_BORDER
+
+            c_dvt = ws.cell(r_num, b_start + 3, "VNĐ")
+            c_dvt.font = tnr_reg
+            c_dvt.alignment = Alignment(horizontal="center", vertical="center")
+            c_dvt.border = THIN_BORDER
+
+            for i, d_item in enumerate(b_decls):
+                c_yr = b_start + 4 + i
+                cell = ws.cell(r_num, c_yr)
+                r1 = r051_map.get(id(d_item))
+                r2_pair = r052_map.get(id(d_item))
+                if r_num == 41:
+                    cell.value = f"='05-1'!H{r1}" if r1 else 0
+                elif r_num == 42:
+                    cell.value = f"='05-1'!R{r1}-'05-1'!U{r1}+'05-1'!V{r1}" if r1 else 0
+                elif r_num == 43:
+                    cell.value = f"='05-2'!G{r2_pair[0]}" if r2_pair else 0
+                elif r_num == 44:
+                    cell.value = f"='05-2'!K{r2_pair[0]}" if r2_pair else 0
+                elif r_num == 45:
+                    cell.value = f"='05-2'!G{r2_pair[1]}" if r2_pair else 0
+                elif r_num == 46:
+                    cell.value = f"='05-2'!K{r2_pair[1]}" if r2_pair else 0
+                cell.font = tnr_reg
+                cell.number_format = "#,##0"
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.border = THIN_BORDER
+                if r_num == 42:
+                    cell.fill = yellow_hl
+
+        # Dòng 47: Tổng hợp tổng số thuế TNCN phải khấu trừ
+        ws.cell(47, b_start, "Tổng hợp tổng số thuế TNCN phải khấu trừ").font = tnr_bold
+        ws.merge_cells(start_row=47, start_column=b_start, end_row=47, end_column=b_start + 3)
+        for c_i in range(b_start, b_start + 4):
+            ws.cell(47, c_i).border = THIN_BORDER
+        for i in range(len(b_decls)):
+            c_yr = b_start + 4 + i
+            col_let = get_column_letter(c_yr)
+            c_tot = ws.cell(47, c_yr, f"={col_let}42+{col_let}44+{col_let}46")
+            c_tot.font = tnr_bold
+            c_tot.number_format = "#,##0"
+            c_tot.alignment = Alignment(horizontal="right", vertical="center")
+            c_tot.border = THIN_BORDER
+            c_tot.fill = yellow_hl
+
     ws.column_dimensions["A"].width = 3
     ws.column_dimensions["B"].width = 3
     ws.freeze_panes = "C3"
@@ -1030,11 +1183,154 @@ def write_sheet_tncn_tk(ws: openpyxl.worksheet.worksheet.Worksheet, d: TaxDeclar
         write_cell_formatted(ws.cell(cur_row, 6), val if val is not None else 0)
         cur_row += 1
 
+    # BẢNG 2 TRÊN SHEET 'TK' (Dòng 38..47): Tổng hợp đối chiếu Thuế TNCN từ tiền lương, tiền công lấy từ sheet '05-1' và '05-2'
+    n_051 = sum(
+        len(r)
+        for k, r in d.appendices.items()
+        if any(t in k.upper() for t in ("05_1", "05-1", "051"))
+    )
+    n_052 = sum(
+        len(r)
+        for k, r in d.appendices.items()
+        if any(t in k.upper() for t in ("05_2", "05-2", "052"))
+    )
+    r_sum_051 = 4 + n_051
+    r_sum_052 = 4 + n_052
+    r_res_052 = r_sum_052 + 1
+    r_nonres_052 = r_sum_052 + 2
+
+    tnr_bold = Font(name="Times New Roman", size=10, bold=True)
+    tnr_reg = Font(name="Times New Roman", size=10, bold=False)
+    yellow_hl = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+
+    # Dòng 38: Tiêu đề cột
+    ws.row_dimensions[38].height = 25.5
+    r38_headers = ["STT", "Chỉ tiêu", "Số báo cáo của người nộp thuế", "Số kiểm tra", "Chênh lệch"]
+    for idx_h, h_text in enumerate(r38_headers, start=2):
+        cell = ws.cell(38, idx_h, h_text)
+        cell.font = tnr_bold
+        cell.border = THIN_BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # Dòng 39: Mã số cột (-1, -2, -3, -4, (5)=(4)-(3))
+    r39_codes: List[Any] = [-1, -2, -3, -4, "(5)=(4)-(3)"]
+    for idx_c, c_val in enumerate(r39_codes, start=2):
+        cell = ws.cell(39, idx_c, c_val)
+        cell.font = tnr_reg
+        cell.border = THIN_BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        if isinstance(c_val, int):
+            cell.number_format = "0_);(0)"
+
+    # Dòng 40: Mục I. Thuế TNCN từ tiền lương, tiền công
+    c_i = ws.cell(40, 2, "I")
+    c_i.font = tnr_bold
+    c_i.alignment = Alignment(horizontal="center", vertical="center")
+    c_i.border = THIN_BORDER
+
+    c_i_title = ws.cell(40, 3, "Thuế TNCN từ tiền lương, tiền công ")
+    c_i_title.font = tnr_bold
+    c_i_title.alignment = Alignment(horizontal="left", vertical="center")
+    ws.merge_cells("C40:F40")
+    for col_m in range(3, 7):
+        ws.cell(40, col_m).border = THIN_BORDER
+
+    # Dòng 41..46: 6 chỉ tiêu lấy công thức trực tiếp từ sheet '05-1' và '05-2'
+    summary_items = [
+        (
+            41,
+            1,
+            "Thu nhập từ tiền lương, tiền công của cá nhân cư trú tính thuế theo biểu thuế lũy tiến từng phần ",
+            f"='05-1'!H{r_sum_051}",
+        ),
+        (
+            42,
+            2,
+            "Thuế TNCN từ tiền lương, tiền công của cá nhân cư trú tính thuế theo biểu thuế lũy tiến từng phần đã khấu trừ",
+            f"='05-1'!R{r_sum_051}-'05-1'!U{r_sum_051}+'05-1'!V{r_sum_051}",
+        ),
+        (
+            43,
+            3,
+            "Thu nhập từ tiền lương, tiền công của cá nhân cư trú tính thuế theo thuế suất toàn phần 10% ",
+            f"='05-2'!G{r_res_052}",
+        ),
+        (
+            44,
+            4,
+            "Thuế TNCN từ tiền lương, tiền công của cá nhân cư trú tính thuế theo thuế suất toàn phần 10% đã khấu trừ",
+            f"='05-2'!K{r_res_052}",
+        ),
+        (
+            45,
+            5,
+            "Thu nhập từ tiền lương, tiền công của cá nhân  không cư trú",
+            f"='05-2'!G{r_nonres_052}",
+        ),
+        (
+            46,
+            6,
+            "Thuế TNCN từ tiền lương, tiền công của cá nhân không cư trú tính theo thuế suất 20% đã khấu trừ",
+            f"='05-2'!K{r_nonres_052}",
+        ),
+    ]
+
+    for r_num, stt_num, label_text, formula_d in summary_items:
+        ws.row_dimensions[r_num].height = 26.25
+        c2 = ws.cell(r_num, 2, stt_num)
+        c2.font = tnr_reg
+        c2.alignment = Alignment(horizontal="center", vertical="center")
+        c2.border = THIN_BORDER
+
+        c3 = ws.cell(r_num, 3, label_text)
+        c3.font = tnr_reg
+        c3.alignment = Alignment(horizontal="justify", vertical="center", wrap_text=True)
+        c3.border = THIN_BORDER
+
+        c4 = ws.cell(r_num, 4, formula_d)
+        c4.font = tnr_reg
+        c4.number_format = "#,##0"
+        c4.alignment = Alignment(horizontal="right", vertical="center")
+        c4.border = THIN_BORDER
+
+        c5 = ws.cell(r_num, 5, f"=D{r_num}")
+        c5.font = tnr_reg
+        c5.number_format = '_(* #,##0_);_(* \\(#,##0\\);_(* "-"??_);_(@_)'
+        c5.alignment = Alignment(horizontal="right", vertical="center")
+        c5.border = THIN_BORDER
+
+        c6 = ws.cell(r_num, 6, f"=E{r_num}-D{r_num}")
+        c6.font = tnr_reg
+        c6.number_format = "#,##0"
+        c6.alignment = Alignment(horizontal="right", vertical="center")
+        c6.border = THIN_BORDER
+
+        if r_num == 42:
+            for c_hl in (c4, c5, c6):
+                c_hl.fill = yellow_hl
+
+    # Dòng 47: Tổng hợp tổng số thuế TNCN phải khấu trừ
+    c47_lbl = ws.cell(47, 2, "Tổng hợp tổng số thuế TNCN phải khấu trừ")
+    c47_lbl.font = tnr_bold
+    c47_lbl.alignment = Alignment(horizontal="left", vertical="center")
+    ws.merge_cells("B47:C47")
+    ws.cell(47, 2).border = THIN_BORDER
+    ws.cell(47, 3).border = THIN_BORDER
+
+    for col_tot, col_let in ((4, "D"), (5, "E"), (6, "F")):
+        c_tot = ws.cell(47, col_tot, f"={col_let}42+{col_let}44+{col_let}46")
+        c_tot.font = tnr_bold
+        c_tot.number_format = "#,##0"
+        c_tot.alignment = Alignment(horizontal="right", vertical="center")
+        c_tot.border = THIN_BORDER
+        if col_tot == 4:
+            c_tot.fill = yellow_hl
+
     ws.column_dimensions["A"].width = 3
     ws.column_dimensions["B"].width = 8
     ws.column_dimensions["C"].width = 54
-    ws.column_dimensions["D"].width = 14
-    ws.column_dimensions["E"].width = 12
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 18
     ws.column_dimensions["F"].width = 18
     ws.freeze_panes = "A3"
 
@@ -1255,6 +1551,32 @@ def write_sheet_tncn_pl(
                     cell.alignment = Alignment(horizontal="right", vertical="center")
                 else:
                     cell.value = 0
+                    cell.number_format = "#,##0"
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+
+        # Với phụ lục 05-2: Thêm 2 dòng tổng hợp tự động tách riêng Cá nhân cư trú (10%, F="[]")
+        # và Cá nhân không cư trú (20%, F="[x]") ngay dưới dòng Tổng để liên kết sang bảng đối chiếu sheet TK
+        if sheet_type == "05-2":
+            for offset, sub_label, crit in (
+                (1, "Trong đó: Cá nhân cư trú (10%)", '"[]"'),
+                (2, "Trong đó: Cá nhân không cư trú (20%)", '"[x]"'),
+            ):
+                sub_r = sum_row + offset
+                ws.cell(sub_r, 1, sub_label).font = BOLD_FONT
+                ws.cell(sub_r, 1).alignment = Alignment(horizontal="right", vertical="center")
+                ws.merge_cells(f"A{sub_r}:F{sub_r}")
+                for c in range(1, len(cols_def) + 1):
+                    cell = ws.cell(sub_r, c)
+                    cell.font = BOLD_FONT
+                    cell.border = THIN_BORDER
+                    if c >= 7:
+                        cl = get_column_letter(c)
+                        if len(rows) > 0:
+                            cell.value = f"=SUMIF($F$4:$F${sum_row-1},{crit},{cl}4:{cl}{sum_row-1})"
+                        else:
+                            cell.value = 0
+                        cell.number_format = "#,##0"
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
 
     total_cols = len(cols_def)
     for c in range(1, total_cols + 1):
@@ -1576,6 +1898,27 @@ def write_consolidated_tncn_appendices(
                         cell.number_format = "#,##0"
                         cell.alignment = Alignment(horizontal="right", vertical="center")
                 cur_row += 1
+
+                if sheet_type == "05-2":
+                    for sub_label, crit in (
+                        (f"Trong đó: Cá nhân cư trú (10%) năm {yr_label}", '"[]"'),
+                        (f"Trong đó: Cá nhân không cư trú (20%) năm {yr_label}", '"[x]"'),
+                    ):
+                        sub_r = cur_row
+                        ws.row_dimensions[sub_r].height = 20
+                        ws.cell(sub_r, 1, sub_label).font = BOLD_FONT
+                        ws.cell(sub_r, 1).alignment = Alignment(horizontal="right", vertical="center")
+                        ws.merge_cells(start_row=sub_r, start_column=1, end_row=sub_r, end_column=6)
+                        for c in range(1, total_cols + 1):
+                            cell = ws.cell(sub_r, c)
+                            cell.font = BOLD_FONT
+                            cell.border = THIN_BORDER
+                            if c >= 7:
+                                cl = get_column_letter(c)
+                                cell.value = f"=SUMIF($F${yr_start}:$F${yr_end},{crit},{cl}{yr_start}:{cl}{yr_end})"
+                                cell.number_format = "#,##0"
+                                cell.alignment = Alignment(horizontal="right", vertical="center")
+                        cur_row += 1
 
         if sheet_type in ("05-1", "05-2") and len(year_sum_rows) > 1:
             grand_row = cur_row
@@ -2774,7 +3117,7 @@ def _populate_workbook_sheets(
     tncn_items = [d for d in valid_decls if d.tax_type == "TNCN"]
     if tncn_items:
         latest_tncn = filter_latest_per_year(tncn_items)
-        write_sheet_tncn_master(wb, latest_tncn, existing_sheets)
+        write_sheet_tncn_master(wb, latest_tncn, existing_sheets, include_appendices=include_appendices)
         if include_appendices:
             write_consolidated_tncn_appendices(wb, latest_tncn, existing_sheets)
 
