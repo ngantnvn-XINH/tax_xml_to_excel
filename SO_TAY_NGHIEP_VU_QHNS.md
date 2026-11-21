@@ -10,7 +10,7 @@
 2. **Cột (4) – Số báo cáo phát sinh phải nộp trong kỳ:** Không bao giờ có số âm.
 3. **Phân biệt rõ theo loại giao dịch trên Sổ Tổng Quan (`TQ`):**
    - **Thuế GTGT (Tiểu mục `1701`):** Số phát sinh trên `TQ` lấy giao dịch **`TK`** theo **Kỳ báo cáo** của từng năm.
-   - **Thuế TNDN (Tiểu mục `1052`):** Số phát sinh trên `TQ` lấy giao dịch **`TK`, `QT`** theo **Kỳ báo cáo** của từng năm.
+   - **Thuế TNDN (Tiểu mục `1052`):** Số phát sinh trên `TQ` lấy tổng giao dịch **`TK`, `TQ`, `QT`** theo **Kỳ báo cáo** của từng năm (lưu ý: tờ khai quyết toán TNDN năm như `20CN`, `25CN` trên TMS thường mang mã **`TQ`**).
    - **Thuế TNCN từ tiền lương, tiền công (Tiểu mục `1001`):** Số phát sinh trên `TQ` lấy tổng giao dịch **`TK`, `TH`, `TQ`** của đúng Tiểu mục **`1001`** theo **Kỳ báo cáo** của từng năm (không trộn tiểu mục `1015` hay `1004`).
    - **Số đã nộp ngân sách – Cột (6):** Lấy giao dịch **`C2`** theo **Năm Ngày hạch toán**, đồng thời ghi nhận cả các giao dịch điều chỉnh chứng từ nộp đặc biệt gồm **`HC`** (Hủy chứng từ) và **`NT`** (ví dụ `NT XU LY CTU AM BK NGAY ...` – xử lý chứng từ âm bảng kê) theo đúng năm ngày hạch toán và dấu đại số trên `TQ`. Tuyệt đối không lấy `PT`, `QH`, `C5`, `KT`.
 4. **Quy tắc xử lý năm tính thuế & chuỗi `Kỳ báo cáo`:**

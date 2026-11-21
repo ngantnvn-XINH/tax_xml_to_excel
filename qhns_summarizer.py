@@ -221,7 +221,7 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                 metrics["gtgt_tk_by_ky"][ky_y] += val
                 if ky:
                     metrics["gtgt_tk_periods"][ky_y].add(ky)
-            elif tm == "1052" and gd in ("TK", "QT"):
+            elif tm == "1052" and gd in ("TK", "TQ", "QT"):
                 metrics["tndn_tk_qt_by_ky"][ky_y] += val
             elif tm == "1001" and gd in ("TK", "TH", "TQ"):
                 metrics["tncn_tk_th_tq_by_ky"][ky_y] += val
@@ -492,11 +492,11 @@ def integrate_tq_and_qhns_into_workbook(
         ws_y["G76"].font = font_bold
 
         if diff_tndn > 1000:
-            ws_y["F76"].comment = Comment(f"Phát sinh TK; QT trên tổng quan (chênh lệch {diff_tndn:,.0f} so với tờ khai TNDN)", "QHNS")
+            ws_y["F76"].comment = Comment(f"Phát sinh TK; TQ; QT trên tổng quan (chênh lệch {diff_tndn:,.0f} so với tờ khai TNDN)", "QHNS")
             tndn_missing_info[y] = f"TNDN {y}"
             alerts.append(f"Năm {y} - Thuế TNDN: Tờ khai ({c76_val:,.0f}) > Tổng quan ({f76_val:,.0f}), chênh lệch {diff_tndn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra.")
         else:
-            ws_y["F76"].comment = Comment("Phát sinh TK; QT trên tổng quan", "QHNS")
+            ws_y["F76"].comment = Comment("Phát sinh TK; TQ; QT trên tổng quan", "QHNS")
             tndn_missing_info[y] = None
 
         # --- Dòng 90: Tổng hợp tổng số thuế TNCN phải khấu trừ ---
@@ -695,7 +695,7 @@ def integrate_tq_and_qhns_into_workbook(
             if tndn_missing_info.get(y):
                 ws_q.cell(r_td, 4, f"='{sname}'!F76")
                 ws_q.cell(r_td, 4).comment = Comment(
-                    "Số phát sinh TNDN đã ghi nhận trên tổng quan (TK; QT)",
+                    "Số phát sinh TNDN đã ghi nhận trên tổng quan (TK; TQ; QT)",
                     "QHNS",
                 )
                 ws_q.cell(r_td, 5, f"='{sname}'!G76")
@@ -704,7 +704,7 @@ def integrate_tq_and_qhns_into_workbook(
                     "QHNS",
                 )
                 tndn_e_cells.append(f"E{r_td}")
-            elif round(decl_vals[y]["tndn_c76"]) > 0 or tndn_ps > 0:
+            else:
                 ws_q.cell(r_td, 4, f"='{sname}'!C76")
         elif tndn_ps > 0:
             ws_q.cell(r_td, 4, tndn_ps)
