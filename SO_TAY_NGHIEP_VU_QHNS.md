@@ -89,7 +89,7 @@ Số đầu kỳ của giai đoạn kiểm tra (`2020–2025`) bao gồm toàn b
    - Áp dụng đồng nhất công thức phân hoạch 3 nhóm A/B/C: Phát sinh (`TK/TQ/QT` theo năm Kỳ báo cáo), Đã nộp (`C2/HC/NT/C5` theo Năm Ngày hạch toán), và Đầu kỳ (`opening_exact["LPMB"]`), kèm Comment thuyết minh chi tiết từng tiểu mục.
 
 4. **Tách riêng 2 sheet chuẩn nghiệp vụ Đoàn kiểm tra thuế:**
-   - **Sheet `QHNS` (Biểu để đưa vào Biên bản kiểm tra):** **KHÔNG** ghi nhận số nộp thừa lũy kế kỳ trước chuyển sang vào Cột (3) `Số kỳ trước chuyển sang` năm đầu tiên (chỉ ghi nhận số còn phải nộp kỳ trước dương).
+   - **Sheet `QHNS` (Biểu để đưa vào Biên bản kiểm tra):** **KHÔNG** ghi nhận số nộp thừa lũy kế kỳ trước chuyển sang vào Cột (3) `Số kỳ trước chuyển sang` năm đầu tiên; chỉ đưa vào đầu kỳ **tất cả số nộp (`C2`/`HC`/`NT`) & `QT` của mọi kỳ trước không thuộc kỳ kiểm tra (`ky_year < start_year`) nộp/hạch toán trong kỳ kiểm tra** (không giới hạn riêng tháng 12 năm trước).
    - **Sheet `DoiChieu_QHNS` (Biểu đối chiếu số khớp thực tế với Sổ `TQ`):**
      - **Bảng 1:** Đối chiếu tổng hợp cuối kỳ nối thẳng công thức từ `QHNS` + `Số nộp thừa / ĐC đầu kỳ không đưa vào Biên bản` − `Số xử lý qua thanh tra (Cột 5)` − `Chênh lệch làm tròn` ↔ **Dư cuối thực tế trên `TQ`** (chênh lệch = `0` đồng).
      - **Bảng 2:** Diễn biến chi tiết từng năm khớp thực tế 100% theo `TQ` (bao gồm cả số nộp thừa kỳ trước chuyển sang).

@@ -215,29 +215,29 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         if gd == "BT":
             continue
 
-        # 1. Ghi nhận chi tiết thuyết minh đầu kỳ (Kỳ báo cáo < start_year nhưng hạch toán trong kỳ kiểm tra)
+        # 1. Ghi nhận số đầu kỳ Biên bản: TẤT CẢ số nộp (C2/HC/NT) & QT của mọi kỳ trước (< start_year) nộp/hạch toán trong kỳ kiểm tra
         if ky_y is not None and ky_y < start_year and start_year <= ht_y <= end_year:
             if tm == "1701":
                 if gd == "QT":
                     metrics["dk_gtgt_qt_truoc"] += abs(val)
-                    metrics["dk_gtgt_qt_notes"].append(f"QT {ky_y} ({ky}) nộp năm {ht_y}")
-                elif gd == "C2" and ky_y == prev_year and ky.startswith(prev_yy):
+                    metrics["dk_gtgt_qt_notes"].append(f"QT {ky_y} ({ky}) hạch toán năm {ht_y}")
+                elif gd in ("C2", "HC", "NT"):
                     metrics["dk_gtgt_c2_prev"] += payment_amount(item)
-                    if ky not in metrics["dk_gtgt_c2_notes"]:
+                    if ky and ky not in metrics["dk_gtgt_c2_notes"]:
                         metrics["dk_gtgt_c2_notes"].append(ky)
             elif tm == "1001":
-                if gd == "C2" and ky_y == prev_year and ky.startswith(prev_yy):
+                if gd in ("C2", "HC", "NT"):
                     metrics["dk_tncn_c2_prev"] += payment_amount(item)
-                    if ky not in metrics["dk_tncn_c2_notes"]:
+                    if ky and ky not in metrics["dk_tncn_c2_notes"]:
                         metrics["dk_tncn_c2_notes"].append(ky)
                 elif gd in ("TQ", "TH") and ky == f"{prev_yy}CN":
                     metrics["dk_tncn_qt_prev"] += val
-                    if ky not in metrics["dk_tncn_qt_notes"]:
+                    if ky and ky not in metrics["dk_tncn_qt_notes"]:
                         metrics["dk_tncn_qt_notes"].append(ky)
             elif tm == "1052":
                 if gd == "QT":
                     metrics["dk_tndn_h"] += abs(val)
-                elif gd == "C2" and ky_y == prev_year:
+                elif gd in ("C2", "HC", "NT"):
                     metrics["dk_tndn_i"] += payment_amount(item)
             elif tm in LPMB_TMS and gd in ("TK", "TQ", "QT"):
                 metrics["dk_lpmb_notes"].append(f"TM {tm} ({ky}): {val:,.0f}")
@@ -697,8 +697,8 @@ def integrate_tq_and_qhns_into_workbook(
                 qt_note = ", ".join(metrics["dk_gtgt_qt_notes"]) or f"QT kỳ trước nộp trong kỳ kiểm tra"
                 ws_q.cell(r_g, 8).comment = Comment(f"Số nộp của {qt_note}", "QHNS")
             if i_val != 0:
-                c2_note = ", ".join(metrics["dk_gtgt_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
-                ws_q.cell(r_g, 9).comment = Comment(f"Số nộp tháng {c2_note} (không gồm số nộp thừa kỳ trước; xem đối chiếu tại sheet DoiChieu_QHNS)", "QHNS")
+                c2_note = ", ".join(metrics["dk_gtgt_c2_notes"]) or f"các kỳ trước {start_year}"
+                ws_q.cell(r_g, 9).comment = Comment(f"Số nộp các kỳ trước ({c2_note}) nộp trong kỳ kiểm tra (không gồm số nộp thừa kỳ trước; xem đối chiếu tại sheet DoiChieu_QHNS)", "QHNS")
             ws_q.cell(r_g, 3, f"=H{r_g}+I{r_g}")
         else:
             ws_q.cell(r_g, 3, f"=G{prev_rows['gtgt']}")
@@ -801,8 +801,8 @@ def integrate_tq_and_qhns_into_workbook(
             ws_q.cell(r_tn, 8).font = font_regular
             ws_q.cell(r_tn, 9).font = font_regular
             if h_tn != 0:
-                c2_tn_note = ", ".join(metrics["dk_tncn_c2_notes"]) or f"{str(start_year - 1)[-2:]}12"
-                ws_q.cell(r_tn, 8).comment = Comment(f"Kỳ kk {c2_tn_note} - Số nộp", "QHNS")
+                c2_tn_note = ", ".join(metrics["dk_tncn_c2_notes"]) or f"các kỳ trước {start_year}"
+                ws_q.cell(r_tn, 8).comment = Comment(f"Số nộp các kỳ trước ({c2_tn_note}) nộp trong kỳ kiểm tra", "QHNS")
             if i_tn != 0:
                 ws_q.cell(r_tn, 9).comment = Comment(
                     f"Số QT {start_year - 1} (TQ + TH) (không gồm số nộp thừa lũy kế kỳ trước; xem đối chiếu tại sheet DoiChieu_QHNS)",
