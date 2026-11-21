@@ -294,7 +294,8 @@ def summarize_tax_payments_to_excel(input_path: str, output_paths: List[str]) ->
     ws_ht.merge_cells(start_row=sum_tm_row, start_column=1, end_row=sum_tm_row, end_column=4)
     for c_i in range(1, 5):
         c = ws_ht.cell(sum_tm_row, c_i)
-        c.value = "TỔNG CỘNG SỐ ĐÃ NỘP" if c_i == 1 else None
+        if c_i == 1:
+            c.value = "TỔNG CỘNG SỐ ĐÃ NỘP"
         c.font = font_bold
         c.fill = TOTAL_FILL
         c.alignment = Alignment(horizontal="center", vertical="center")
@@ -385,7 +386,8 @@ def summarize_tax_payments_to_excel(input_path: str, output_paths: List[str]) ->
     ws_ht.merge_cells(start_row=sum_grp_row, start_column=1, end_row=sum_grp_row, end_column=4)
     for c_i in range(1, 5):
         c = ws_ht.cell(sum_grp_row, c_i)
-        c.value = "TỔNG CỘNG TOÀN BỘ CÁC SẮC THUẾ" if c_i == 1 else None
+        if c_i == 1:
+            c.value = "TỔNG CỘNG TOÀN BỘ CÁC SẮC THUẾ"
         c.font = font_bold
         c.fill = TOTAL_FILL
         c.alignment = Alignment(horizontal="center", vertical="center")
@@ -469,7 +471,8 @@ def summarize_tax_payments_to_excel(input_path: str, output_paths: List[str]) ->
     ws_ht.merge_cells(start_row=v_sum_row, start_column=1, end_row=v_sum_row, end_column=5)
     for c_i in range(1, 6):
         c = ws_ht.cell(v_sum_row, c_i)
-        c.value = "TỔNG CỘNG" if c_i == 1 else None
+        if c_i == 1:
+            c.value = "TỔNG CỘNG"
         c.font = font_bold
         c.fill = TOTAL_FILL
         c.alignment = Alignment(horizontal="center", vertical="center")
@@ -575,7 +578,8 @@ def summarize_tax_payments_to_excel(input_path: str, output_paths: List[str]) ->
     ws_ky.merge_cells(start_row=ky_sum_row, start_column=1, end_row=ky_sum_row, end_column=4)
     for c_i in range(1, 5):
         c = ws_ky.cell(ky_sum_row, c_i)
-        c.value = "TỔNG CỘNG SỐ ĐÃ NỘP" if c_i == 1 else None
+        if c_i == 1:
+            c.value = "TỔNG CỘNG SỐ ĐÃ NỘP"
         c.font = font_bold
         c.fill = TOTAL_FILL
         c.alignment = Alignment(horizontal="center", vertical="center")
