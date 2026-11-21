@@ -784,6 +784,64 @@ def write_sheet_bctc_cdkt(
 # ==============================================================================
 # 4. CÁC HÀM XUẤT SHEET TNCN: SHEET TỔNG HỢP VÀ CÁC SHEET TỜ KHAI RIÊNG (TK, 05-1, 05-2, 05-3)
 # ==============================================================================
+def _compute_tncn_pl_summary(d: TaxDeclaration) -> Tuple[int, int, int, int, int, int]:
+    """
+    Tính trực tiếp 6 chỉ tiêu tổng hợp từ phụ lục 05-1 và 05-2 trong bộ nhớ của tờ khai d:
+    (1: TNCT 05-1, 2: Thuế 05-1 sau bù trừ nộp thừa/phải nộp, 3: TNCT 05-2 cư trú 10%,
+     4: Thuế 05-2 cư trú 10%, 5: TNCT 05-2 không cư trú 20%, 6: Thuế 05-2 không cư trú 20%).
+    Đảm bảo sheet 'TNCN' trong file tổng hợp luôn có đầy đủ số liệu 100% kể cả khi không xuất kèm các sheet phụ lục.
+    """
+    is_tt156 = _is_tt156_decl(d)
+    tnct_051 = 0
+    thue_kt_051 = 0
+    thue_thua_051 = 0
+    thue_cpn_051 = 0
+
+    tnct_052_res = 0
+    thue_052_res = 0
+    tnct_052_nonres = 0
+    thue_052_nonres = 0
+
+    def _to_int(v: Any) -> int:
+        if v is None or v == "":
+            return 0
+        try:
+            return int(float(v))
+        except (ValueError, TypeError):
+            return 0
+
+    for pl_name, rows in d.appendices.items():
+        pl_u = pl_name.upper()
+        if any(t in pl_u for t in ("05_1", "05-1", "051")):
+            for r in rows:
+                row_156 = is_tt156 or ("caNhanNNUQQT" in r)
+                if row_156:
+                    tnct_051 += _to_int(_first_not_none(r, ("ct11", "tongTNCT", "11")))
+                    thue_kt_051 += _to_int(_first_not_none(r, ("ct20", "thueDaKhauTru", "20")))
+                    thue_thua_051 += _to_int(_first_not_none(r, ("ct23", "thueNopThua", "23")))
+                    thue_cpn_051 += _to_int(_first_not_none(r, ("ct24", "thueConPhaiNop", "24")))
+                else:
+                    tnct_051 += _to_int(_first_not_none(r, ("ct12", "tongTNCT", "12")))
+                    thue_kt_051 += _to_int(_first_not_none(r, ("ct22", "thueDaKhauTru", "22")))
+                    thue_thua_051 += _to_int(_first_not_none(r, ("ct25", "thueNopThua", "25")))
+                    thue_cpn_051 += _to_int(_first_not_none(r, ("ct26", "thueConPhaiNop", "26")))
+        elif any(t in pl_u for t in ("05_2", "05-2", "052")):
+            for r in rows:
+                kct_raw = _first_not_none(r, ("ct10", "caNhanKhongCuTru", "10"))
+                is_nonres = kct_raw in (1, "1", True, "true", "True", "[x]")
+                tn = _to_int(_first_not_none(r, ("ct11", "tongTNCT", "11")))
+                th = _to_int(_first_not_none(r, ("ct15", "thueDaKhauTru", "15")))
+                if is_nonres:
+                    tnct_052_nonres += tn
+                    thue_052_nonres += th
+                else:
+                    tnct_052_res += tn
+                    thue_052_res += th
+
+    thue_051_net = thue_kt_051 - thue_thua_051 + thue_cpn_051
+    return (tnct_051, thue_051_net, tnct_052_res, thue_052_res, tnct_052_nonres, thue_052_nonres)
+
+
 def write_sheet_tncn_master(
     wb: openpyxl.Workbook,
     declarations: List[TaxDeclaration],
@@ -1091,18 +1149,19 @@ def write_sheet_tncn_master(
                 cell = ws.cell(r_num, c_yr)
                 r1 = r051_map.get(id(d_item))
                 r2_pair = r052_map.get(id(d_item))
+                calc_vals = _compute_tncn_pl_summary(d_item)
                 if r_num == 41:
-                    cell.value = f"='05-1'!H{r1}" if r1 else 0
+                    cell.value = f"='05-1'!H{r1}" if r1 else calc_vals[0]
                 elif r_num == 42:
-                    cell.value = f"='05-1'!R{r1}-'05-1'!U{r1}+'05-1'!V{r1}" if r1 else 0
+                    cell.value = f"='05-1'!R{r1}-'05-1'!U{r1}+'05-1'!V{r1}" if r1 else calc_vals[1]
                 elif r_num == 43:
-                    cell.value = f"='05-2'!G{r2_pair[0]}" if r2_pair else 0
+                    cell.value = f"='05-2'!G{r2_pair[0]}" if r2_pair else calc_vals[2]
                 elif r_num == 44:
-                    cell.value = f"='05-2'!K{r2_pair[0]}" if r2_pair else 0
+                    cell.value = f"='05-2'!K{r2_pair[0]}" if r2_pair else calc_vals[3]
                 elif r_num == 45:
-                    cell.value = f"='05-2'!G{r2_pair[1]}" if r2_pair else 0
+                    cell.value = f"='05-2'!G{r2_pair[1]}" if r2_pair else calc_vals[4]
                 elif r_num == 46:
-                    cell.value = f"='05-2'!K{r2_pair[1]}" if r2_pair else 0
+                    cell.value = f"='05-2'!K{r2_pair[1]}" if r2_pair else calc_vals[5]
                 cell.font = tnr_reg
                 cell.number_format = "#,##0"
                 cell.alignment = Alignment(horizontal="right", vertical="center")
@@ -1757,19 +1816,19 @@ def write_consolidated_tncn_appendices(
                         ("tongTNCT", ("ct11", "tongTNCT", "11")),
                         ("tnctTaiToChuc", ("ct12", "tnctTaiToChuc", "12")),
                         ("tnctMienHiepDinh", ("ct13", "tnctMienHiepDinh", "13")),
-                        ("tnctMienDauKhi", ("ct14", "tnctMienDauKhi", "14")),
-                        ("soLuongNPT", ("ct15", "soLuongNPT", "15")),
-                        ("tongGiamTruGiaCanh", ("ct16", "tongGiamTruGiaCanh", "16")),
-                        ("tuThien", ("ct17", "tuThien", "17")),
-                        ("baoHiem", ("ct18", "baoHiem", "18")),
-                        ("huuTri", ("ct19", "huuTri", "19")),
-                        ("tntt", ("ct20", "tntt", "20")),
-                        ("thueDaKhauTru", ("ct21", "thueDaKhauTru", "21")),
-                        ("thueDaKhauTruTaiToChuc", ("ct22", "thueDaKhauTruTaiToChuc", "22")),
-                        ("tongThuePhaiNop", ("ct23", "tongThuePhaiNop", "23")),
-                        ("thueNopThua", ("ct24", "thueNopThua", "24")),
-                        ("thueConPhaiNop", ("ct25", "thueConPhaiNop", "25")),
-                        ("caNhanMienDuoi50k", ("ct27", "caNhanMienDuoi50k")),
+                        ("tnctMienDauKhi", ("tnctMienDauKhi",)),
+                        ("soLuongNPT", ("ct14", "soLuongNPT", "14")),
+                        ("tongGiamTruGiaCanh", ("ct15", "tongGiamTruGiaCanh", "15")),
+                        ("tuThien", ("ct16", "tuThien", "16")),
+                        ("baoHiem", ("ct17", "baoHiem", "17")),
+                        ("huuTri", ("ct18", "huuTri", "18")),
+                        ("tntt", ("ct19", "tntt", "19")),
+                        ("thueDaKhauTru", ("ct20", "thueDaKhauTru", "20")),
+                        ("thueDaKhauTruTaiToChuc", ("ct21", "thueDaKhauTruTaiToChuc", "21")),
+                        ("tongThuePhaiNop", ("ct22", "tongThuePhaiNop", "22")),
+                        ("thueNopThua", ("ct23", "thueNopThua", "23")),
+                        ("thueConPhaiNop", ("ct24", "thueConPhaiNop", "24")),
+                        ("caNhanMienDuoi50k", ("caNhanMienDuoi50k",)),
                     ]
                 else:
                     col_candidates = [

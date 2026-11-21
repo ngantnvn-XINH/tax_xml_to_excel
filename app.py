@@ -100,7 +100,7 @@ class TaxXmlToExcelApp:
 
         self.var_appendix = tk.BooleanVar(value=True)
         self.var_split = tk.BooleanVar(value=False)
-        self.var_split_year = tk.BooleanVar(value=True)
+        self.var_split_year = tk.BooleanVar(value=False)
         self.var_open_after = tk.BooleanVar(value=True)
 
         ttk.Checkbutton(row_opt1, text="Xuất kèm phụ lục (05-1, 05-2, 05-3...)", variable=self.var_appendix).pack(
