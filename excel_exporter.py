@@ -1661,8 +1661,9 @@ def write_sheet_tncn_pl(
 def write_single_year_tncn_file(
     output_filepath: str,
     decl: TaxDeclaration,
+    tms_npt_path: Optional[str] = None,
 ) -> None:
-    """Tạo 1 file Excel riêng cho quyết toán TNCN của 1 năm với đúng 4 sheet: TK, 05-1, 05-2, 05-3."""
+    """Tạo 1 file Excel riêng cho quyết toán TNCN của 1 năm với đúng 4 sheet: TK, 05-1, 05-2, 05-3 (và tự động đối chiếu NPT nếu có file TMS)."""
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
@@ -1696,6 +1697,10 @@ def write_single_year_tncn_file(
     # 4. Sheet '05-3'
     ws_05_3 = wb.create_sheet(title="05-3")
     write_sheet_tncn_pl(ws_05_3, COLS_05_3, MERGES_05_3, rows_05_3, "05-3", is_tt156=is_tt156)
+
+    if tms_npt_path and os.path.isfile(tms_npt_path):
+        from npt_reconciler import reconcile_05_3_in_workbook
+        reconcile_05_3_in_workbook(wb, tms_npt_path, tax_year=decl.year)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_filepath)), exist_ok=True)
     wb.save(output_filepath)
@@ -3624,6 +3629,7 @@ def export_to_excel(
     split_by_year: bool = False,
     layout: str = "vertical",
     cutoff_date: Optional[datetime.date] = None,
+    tms_npt_path: Optional[str] = None,
 ) -> List[str]:
     """
     Xuất danh sách TaxDeclaration ra file Excel chuẩn 100% mẫu người dùng (Phiên bản v1.2):
@@ -3650,7 +3656,7 @@ def export_to_excel(
                 latest_tncn = filter_latest_per_year(tncn_decls)
                 if latest_tncn:
                     tncn_file = os.path.join(out_dir, f"QTT_TNCN_{yr}{ext}")
-                    write_single_year_tncn_file(tncn_file, latest_tncn[-1])
+                    write_single_year_tncn_file(tncn_file, latest_tncn[-1], tms_npt_path=tms_npt_path)
                     created_files.append(tncn_file)
 
             other_decls = [d for d in yr_decls if d.tax_type != "TNCN"]
@@ -3709,6 +3715,9 @@ def export_to_excel(
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     _populate_workbook_sheets(wb, declarations, valid, include_appendices=include_appendices, cutoff_date=cutoff_date)
+    if tms_npt_path and os.path.isfile(tms_npt_path) and "05-3" in wb.sheetnames:
+        from npt_reconciler import reconcile_05_3_in_workbook
+        reconcile_05_3_in_workbook(wb, tms_npt_path)
     wb.save(output_path)
     created_files.append(output_path)
 

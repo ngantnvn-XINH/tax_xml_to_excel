@@ -930,6 +930,79 @@ class TestTaxXmlToExcel(unittest.TestCase):
             for c in range(1, 9):
                 self.assertIsNone(ws_rep.cell(r, c).fill.fill_type)
 
+    def test_v15_npt_reconciliation_05_3(self) -> None:
+        """Kiểm thử v1.5: Đối chiếu Người phụ thuộc bảng kê 05-3 với file kết xuất TMS (đủ các kịch bản thực tế)."""
+        from npt_reconciler import reconcile_npt_file, parse_ym
+
+        self.assertEqual(parse_ym("72018"), (2018, 7))
+        self.assertEqual(parse_ym("122019"), (2019, 12))
+        self.assertEqual(parse_ym("12024"), (2024, 1))
+        self.assertEqual(parse_ym("05/2024"), (2024, 5))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Tạo file TMS giả lập (định dạng CSV chuẩn TMS có NBSP và 2 cột trùng tên 'Tháng')
+            tms_path = os.path.join(tmpdir, "tms_npt_sample.csv")
+            tms_content = (
+                "19.11.2026\tHIỂN THỊ DANH SÁCH ĐỘNG\n"
+                "\n"
+                "Danh sách kết quả\n"
+                " Ngày tạo,Ngày TĐ,MST NNT,Tên NNT,MST NPT,Tên NPT,Tên trạng thái NPT,Ngày sinh,CMND,Quan hệ, Tháng, Tháng,MST CQCT,Tên CQ chi trả,Mẫu BK/TK,Hộ chiếu,Mã trạng t\n"
+                # TH1: KHỚP (có 1 dòng 20/DK-TCT trống ngày + 1 dòng 16-TH hợp lệ từ 01/2023 vô thời hạn)
+                ", ,8000000001,Nguyễn Văn A,8900000001,Nguyễn Bé Một,NNT đang hoạt động,01.01.2015,079215000001,Con, , ,0100000001,CTY A,20/DK-TCT,,00\n"
+                "04.02.2023,04.02.2023,8000000001,Nguyễn Văn A,8900000001,Nguyễn Bé Một,NNT đang hoạt động,01.01.2015,079215000001,Con,12023, ,0100000001,CTY A,16-TH,,00\n"
+                # TH2: BÁO GIẢM 06/2024 (dòng cũ mở vô thời hạn, dòng mới hơn 20.07.2024 chốt Đến tháng 62024)
+                "10.01.2020,10.01.2020,8000000002,Trần Thị B,8900000002,Trần Bé Hai,NNT đang hoạt động,05.05.2014,079214000002,Con,12020, ,0100000001,CTY A,16-TH,,00\n"
+                "20.07.2024,20.07.2024,8000000002,Trần Thị B,8900000002,Trần Bé Hai,NNT đang hoạt động,05.05.2014,079214000002,Con,12020,62024,0100000001,CTY A,16-TH,,00\n"
+                # TH3: Khớp qua CCCD mất số 0 đầu trên TMS (40152015439 vs 040152015439 trên 05-3)
+                "15.01.2022,15.01.2022,8000000003,Lê Văn C,8900000003,Lê Thị Mẹ,NNT đang hoạt động,10.10.1955,40152015439,Cha/Mẹ,12022, ,0100000001,CTY A,16-TH,,00\n"
+                # TH4: MST NPT ngừng hoạt động (Mã 01)
+                "10.01.2023,10.01.2023,8000000004,Phạm Văn D,8900000004,Phạm Bé Bốn,NNT ngừng hoạt động đã chấm dứt HL MST,01.01.2016,,Con,12023, ,0100000001,CTY A,16-TH,,01\n"
+            )
+            with open(tms_path, "w", encoding="utf-8") as f:
+                f.write(tms_content)
+
+            # 2. Tạo file Excel QTT_TNCN_2024.xlsx giả lập có sheet '05-3'
+            tncn_path = os.path.join(tmpdir, "QTT_TNCN_2024.xlsx")
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "05-3"
+            ws.append(["STT", "Họ tên NNT", "MST NNT", "Họ tên NPT", "Ngày sinh", "MST NPT", "Loại GT", "Số GT", "Quan hệ", "Từ tháng", "Đến tháng"])
+            ws.append(["", "", "", "", "", "", "", "", "", "Từ tháng", "Đến tháng"])
+            ws.append(["[06]", "[07]", "[08]", "[09]", "[10]", "[11]", "[12]", "[13]", "[14]", "[15]", "[16]"])
+            # Row 4: KHỚP (12 tháng)
+            ws.append([1, "Nguyễn Văn A", "8000000001", "Nguyễn Bé Một", "01/01/2015", "8900000001", "CCCD", "079215000001", "Con", "01/2024", "12/2024"])
+            # Row 5: VƯỢT 6 THÁNG (TMS chốt 06/2024, 05-3 khai 01/2024-12/2024)
+            ws.append([2, "Trần Thị B", "8000000002", "Trần Bé Hai", "05/05/2014", "8900000002", "CCCD", "079214000002", "Con", "01/2024", "12/2024"])
+            # Row 6: CHƯA ĐĂNG KÝ (12 tháng loại trừ)
+            ws.append([3, "Hoàng Văn E", "8000000005", "Hoàng Bé Năm", "02/02/2018", "8900000099", "CCCD", "079218000099", "Con", "01/2024", "12/2024"])
+            # Row 7: KHỚP qua CCCD mất số 0 đầu (05-3 để trống MST NPT)
+            ws.append([4, "Lê Văn C", "8000000003", "Lê Thị Mẹ", "10/10/1955", "", "CCCD", "040152015439", "Cha/Mẹ", "01/2024", "12/2024"])
+            # Row 8: MST NPT ngừng hoạt động (Mã 01)
+            ws.append([5, "Phạm Văn D", "8000000004", "Phạm Bé Bốn", "01/01/2016", "8900000004", "GKS", "", "Con", "01/2024", "12/2024"])
+            wb.save(tncn_path)
+
+            # 3. Chạy đối chiếu
+            stats = reconcile_npt_file(tncn_path, tms_path, tax_year=2024)
+            self.assertEqual(stats["total_rows"], 5)
+            self.assertEqual(stats["matched"], 2)  # Row 4 & Row 7
+            self.assertEqual(stats["issues"], 3)   # Row 5, Row 6, Row 8
+            self.assertEqual(stats["total_diff_months"], 18)  # 6 + 12
+            self.assertEqual(stats["total_disallowed_amount"], 18 * 4_400_000)
+
+            wb_res = openpyxl.load_workbook(tncn_path, data_only=False)
+            self.assertIn("DoiChieu_NPT", wb_res.sheetnames)
+            self.assertIn("DS_NPT_HeThong", wb_res.sheetnames)
+            ws_053 = wb_res["05-3"]
+            self.assertEqual(ws_053["S4"].value, "KHỚP")
+            self.assertIn("VƯỢT THỜI GIAN ĐĂNG KÝ", str(ws_053["S5"].value))
+            self.assertEqual(ws_053["P5"].value, 6)
+            self.assertEqual(ws_053["Q5"].value, "=MAX(0,L5-P5)")
+            self.assertIn("CHƯA ĐĂNG KÝ", str(ws_053["S6"].value))
+            self.assertEqual(ws_053["S7"].value, "KHỚP")
+            self.assertIn("NGỪNG HĐ", str(ws_053["S8"].value))
+            # Kiểm tra ô tham số mức giảm trừ 4.400.000 trên DoiChieu_NPT
+            self.assertEqual(wb_res["DoiChieu_NPT"]["C4"].value, 4_400_000)
+
 
 if __name__ == "__main__":
     unittest.main()

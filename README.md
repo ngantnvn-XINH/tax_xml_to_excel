@@ -1,8 +1,11 @@
-# Ứng Dụng Chuyển Đổi Hồ Sơ Thuế XML Sang Excel, Đối Chiếu QHNS & Tính Tiền Chậm Nộp (v1.4)
+# Ứng Dụng Chuyển Đổi Hồ Sơ Thuế XML Sang Excel, Đối Chiếu QHNS, Đối Chiếu NPT & Tính Tiền Chậm Nộp (v1.5)
 
 Công cụ ETL (Extract – Transform – Load) chuyên dụng giúp đọc, làm sạch, chuẩn hóa và tổng hợp **100% dữ liệu từ hồ sơ khai thuế XML (HTKK / eTax)** sang file Excel chuẩn mẫu kế toán - thanh tra, kiểm tra thuế.
 
-## Tính năng nổi bật (Phiên bản v1.4)
+## Tính năng nổi bật (Phiên bản v1.5)
+- **Tự động đối chiếu Người phụ thuộc trên bảng kê `05-3` với dữ liệu hệ thống TMS (`DoiChieu_NPT` & `DS_NPT_HeThong`):**
+  - Đọc trực tiếp file Excel (`.xlsx`) hoặc CSV (`.csv`) kết xuất từ chức năng *"HIỂN THỊ DANH SÁCH ĐỘNG"* của hệ thống TMS (tự xử lý khoảng trắng `\xa0`, 2 cột trùng tên `Tháng`, hợp nhất lịch sử báo tăng/báo giảm nhiều dòng cho cùng 1 NPT, khớp CCCD/CMND bị mất số `0` đầu và Hộ chiếu).
+  - Tự động bổ sung 8 cột đối chiếu (`L..S`) ngay bên phải sheet `05-3` và sinh sheet tổng hợp `DoiChieu_NPT` phát hiện: **Chưa đăng ký**, **Vượt thời gian đăng ký / đã báo giảm**, **Trùng NPT giữa nhiều NNT**, **MST NPT ngừng hoạt động**, kèm công thức động tính **Số tháng loại trừ** và **Số tiền giảm trừ không đủ điều kiện** (mức giảm trừ tự động theo giai đoạn pháp luật: `3,6tr` ≤2019 / `4,4tr` 2020–2025 / `6,2tr` ≥2026).
 - **Tự động lập Báo cáo tổng hợp số liệu đưa vào Biên bản kiểm tra (`BaoCao_BienBan`):**
   - Cài sẵn **100% công thức Excel liên kết tự động** từ các sheet Năm (`2020`..`2025`...) và `Tinh_TienChamNop` qua đủ 10 bảng: Thuế GTGT đầu ra, GTGT khấu trừ kỳ trước & đầu vào, Điều chỉnh tăng/giảm khấu trừ, Tổng hợp GTGT phải nộp & còn được khấu trừ, Thu nhập chịu thuế, Thuế TNDN ưu đãi miễn giảm, Thuế TNDN phải nộp, Thu nhập & Thuế TNCN, Thuế Nhà thầu nước ngoài, và Bảng Kết luận tổng hợp (Truy thu chi tiết từng năm, Tiền chậm nộp, Phạt 20%, Phạt trốn thuế, Phạt VPHC thủ tục, Giảm thuế GTGT khấu trừ chuyển kỳ sau & Giảm lỗ chuyển kỳ sau).
 - **Tự động lập Biểu tính tiền truy thu, xử phạt VPHC & tiền chậm nộp (`Tinh_TienChamNop`):**
@@ -47,6 +50,7 @@ python test_app.py
 - `qhns_summarizer.py`: Module đối chiếu dữ liệu Sổ Tổng Quan (`TQ`), kiểm tra chênh lệch Tờ khai vs Tổng quan (`F23/G23`, `F76/G76`, `F90/G90`) và tổng hợp 2 biểu `QHNS` & `DoiChieu_QHNS`.
 - `penalty_calculator.py`: Module sinh sheet `Tinh_TienChamNop` (biểu tính thuế truy thu, phạt khai sai 20%, phạt trốn thuế 1–3 lần, phạt VPHC thủ tục và tiền chậm nộp đa giai đoạn kèm kiểm tra thời hiệu 5/10 năm).
 - `report_builder.py`: Module sinh sheet `BaoCao_BienBan` (báo cáo tổng hợp 10 bảng đưa vào Biên bản kiểm tra, tự động cài công thức liên kết từ các sheet năm và `Tinh_TienChamNop`).
+- `npt_reconciler.py`: Module đối chiếu bảng kê Người phụ thuộc `05-3` với file kết xuất từ hệ thống TMS (`DoiChieu_NPT` & `DS_NPT_HeThong`).
 - `payment_summarizer.py`: Module tổng hợp sổ nộp ngân sách (`so_nop.xlsx`) theo Năm Ngày nộp thuế và Tiểu mục.
 - `tax_Extractor_app.py` / `app.py`: Giao diện người dùng Desktop.
 - `xml_parser.py` / `tax_parser.py`: Bộ phân tích cú pháp & trích xuất dữ liệu XML thuế (Extract).
