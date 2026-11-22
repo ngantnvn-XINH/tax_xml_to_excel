@@ -13,7 +13,6 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List
 
 from excel_exporter import export_to_excel
-from npt_reconciler import reconcile_npt_file
 from penalty_calculator import parse_cutoff_date
 from qhns_summarizer import integrate_tq_and_qhns_into_workbook
 from tax_parser import TaxDeclaration, parse_tax_xml
@@ -85,20 +84,20 @@ class TaxXmlToExcelApp:
         ttk.Button(tq_frame, text="Chọn file TQ (.xlsx)...", command=self.select_tq_file).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(tq_frame, text="Bỏ chọn", command=self.clear_tq_file).pack(side=tk.LEFT)
 
-        # Khung chọn file Người phụ thuộc (NPT) kết xuất từ TMS để đối chiếu bảng kê 05-3
-        npt_frame = ttk.LabelFrame(
+        # Khung chọn Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) tùy chọn để đối chiếu & lên tự động mục Thuế nhà thầu trên QHNS
+        ntnn_frame = ttk.LabelFrame(
             self.root,
-            text="1c. Dữ liệu Người phụ thuộc từ TMS (Tùy chọn: nếu chọn sẽ tự động đối chiếu bảng kê 05-3 khi xuất TNCN)",
+            text="1c. Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN - Tùy chọn: nếu chọn sẽ tự động đối chiếu & lên mục Thuế nhà thầu trên QHNS)",
             padding=(10, 6),
         )
-        npt_frame.pack(fill=tk.X, padx=12, pady=4)
+        ntnn_frame.pack(fill=tk.X, padx=12, pady=4)
 
-        self.var_npt_path = tk.StringVar(value="")
-        ttk.Label(npt_frame, text="File NPT hệ thống (.xlsx/.csv):").pack(side=tk.LEFT, padx=(0, 6))
-        self.ent_npt_path = ttk.Entry(npt_frame, textvariable=self.var_npt_path)
-        self.ent_npt_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        ttk.Button(npt_frame, text="Chọn file NPT...", command=self.select_npt_file).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(npt_frame, text="Bỏ chọn", command=self.clear_npt_file).pack(side=tk.LEFT)
+        self.var_tq_ntnn_path = tk.StringVar(value="")
+        ttk.Label(ntnn_frame, text="File Sổ TQ Nhà thầu (TQ_NTNN):").pack(side=tk.LEFT, padx=(0, 6))
+        self.ent_tq_ntnn_path = ttk.Entry(ntnn_frame, textvariable=self.var_tq_ntnn_path)
+        self.ent_tq_ntnn_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Button(ntnn_frame, text="Chọn file TQ Nhà thầu (.xlsx)...", command=self.select_tq_ntnn_file).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(ntnn_frame, text="Bỏ chọn", command=self.clear_tq_ntnn_file).pack(side=tk.LEFT)
 
         # Khung bộ lọc & tùy chọn
         opt_frame = ttk.LabelFrame(self.root, text="2. Tùy chọn lọc & xuất Excel", padding=10)
@@ -259,17 +258,9 @@ class TaxXmlToExcelApp:
             bottom_frame,
             text="XUẤT TNCN RIÊNG THEO NĂM",
             command=self.export_tncn_separate,
-            width=25,
+            width=26,
         )
-        self.btn_export_tncn.pack(side=tk.RIGHT, padx=(8, 0))
-
-        self.btn_npt = ttk.Button(
-            bottom_frame,
-            text="ĐỐI CHIẾU NPT (05-3)",
-            command=self.run_npt_standalone,
-            width=21,
-        )
-        self.btn_npt.pack(side=tk.RIGHT)
+        self.btn_export_tncn.pack(side=tk.RIGHT)
 
     def select_tq_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -282,16 +273,16 @@ class TaxXmlToExcelApp:
     def clear_tq_file(self) -> None:
         self.var_tq_path.set("")
 
-    def select_npt_file(self) -> None:
+    def select_tq_ntnn_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Chọn file dữ liệu Người phụ thuộc kết xuất từ hệ thống TMS (.xlsx hoặc .csv)",
-            filetypes=[("Excel / CSV", "*.xlsx *.csv"), ("Excel Workbook", "*.xlsx"), ("CSV", "*.csv"), ("All files", "*.*")],
+            title="Chọn file Excel Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) tải từ TMS",
+            filetypes=[("Excel Workbook", "*.xlsx"), ("All files", "*.*")],
         )
         if path:
-            self.var_npt_path.set(os.path.normpath(path))
+            self.var_tq_ntnn_path.set(os.path.normpath(path))
 
-    def clear_npt_file(self) -> None:
-        self.var_npt_path.set("")
+    def clear_tq_ntnn_file(self) -> None:
+        self.var_tq_ntnn_path.set("")
 
     def _get_year_bounds(self) -> tuple[int | None, int | None]:
         if not self.var_filter_year.get():
@@ -482,14 +473,14 @@ class TaxXmlToExcelApp:
         open_after = self.var_open_after.get()
         layout_mode = self.var_layout.get()
         tq_path = self.var_tq_path.get().strip()
-        npt_path = self.var_npt_path.get().strip()
+        tq_ntnn_path = self.var_tq_ntnn_path.get().strip()
+        valid_ntnn = tq_ntnn_path if (tq_ntnn_path and os.path.isfile(tq_ntnn_path)) else None
         y_from, y_to = self._get_year_bounds()
         cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
         self.btn_qhns.config(state=tk.DISABLED)
-        self.btn_npt.config(state=tk.DISABLED)
         self.lbl_status.config(text="Đang xuất Excel...")
         self.root.update_idletasks()
 
@@ -503,7 +494,6 @@ class TaxXmlToExcelApp:
                     split_by_year=split_years,
                     layout=layout_mode,
                     cutoff_date=cutoff_dt,
-                    tms_npt_path=npt_path if (npt_path and os.path.isfile(npt_path)) else None,
                 )
 
                 qhns_alerts: List[str] = []
@@ -517,6 +507,7 @@ class TaxXmlToExcelApp:
                         year_to=y_to,
                         output_path=created[0],
                         cutoff_date=cutoff_dt,
+                        tq_ntnn_excel_path=valid_ntnn,
                     )
                     qhns_alerts = qhns_res.get("alerts", [])
                     qhns_done = True
@@ -525,13 +516,12 @@ class TaxXmlToExcelApp:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
                     self.btn_qhns.config(state=tk.NORMAL)
-                    self.btn_npt.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Xuất Excel thành công!")
                     msg = "Đã xuất thành công:\n" + "\n".join(created)
-                    if npt_path and os.path.isfile(npt_path):
-                        msg += "\n\nĐã tự động đối chiếu Người phụ thuộc (05-3 vs TMS) kèm sheet DoiChieu_NPT & DS_NPT_HeThong!"
                     if qhns_done:
                         msg += "\n\nĐã tích hợp Sổ Tổng Quan (TQ), đối chiếu cột F/G trên các sheet năm và lập biểu QHNS!"
+                        if valid_ntnn:
+                            msg += "\nĐã tích hợp thêm Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) vào QHNS & DoiChieu_QHNS!"
                         if qhns_alerts:
                             msg += "\n\nLƯU Ý PHÁT HIỆN CHÊNH LỆCH TỜ KHAI vs TỔNG QUAN:\n- " + "\n- ".join(qhns_alerts)
                     messagebox.showinfo("Hoàn tất", msg)
@@ -547,7 +537,6 @@ class TaxXmlToExcelApp:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
                     self.btn_qhns.config(state=tk.NORMAL)
-                    self.btn_npt.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Lỗi khi xuất Excel!")
                     messagebox.showerror("Lỗi", f"Không thể xuất file Excel:\n{exc}")
 
@@ -574,6 +563,9 @@ class TaxXmlToExcelApp:
                 return
             self.var_tq_path.set(os.path.normpath(tq_path))
 
+        tq_ntnn_path = self.var_tq_ntnn_path.get().strip()
+        valid_ntnn = tq_ntnn_path if (tq_ntnn_path and os.path.isfile(tq_ntnn_path)) else None
+
         y_from, y_to = self._get_year_bounds()
         open_after = self.var_open_after.get()
         cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
@@ -593,6 +585,7 @@ class TaxXmlToExcelApp:
                     year_to=y_to,
                     output_path=excel_path,
                     cutoff_date=cutoff_dt,
+                    tq_ntnn_excel_path=valid_ntnn,
                 )
 
                 def on_done() -> None:
@@ -603,6 +596,8 @@ class TaxXmlToExcelApp:
                     yrs = res.get("years", [])
                     yr_label = f"{yrs[0]}–{yrs[-1]}" if yrs else ""
                     msg = f"Đã tích hợp Sổ Tổng Quan (TQ), đối chiếu F/G và lập biểu QHNS ({yr_label}) vào file:\n{excel_path}"
+                    if valid_ntnn:
+                        msg += "\nĐã tích hợp thêm Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) vào QHNS & DoiChieu_QHNS!"
                     alerts = res.get("alerts", [])
                     if alerts:
                         msg += "\n\nLƯU Ý PHÁT HIỆN CHÊNH LỆCH TỜ KHAI vs TỔNG QUAN:\n- " + "\n- ".join(alerts)
@@ -644,14 +639,10 @@ class TaxXmlToExcelApp:
             return
 
         open_after = self.var_open_after.get()
-        npt_path = self.var_npt_path.get().strip()
-        valid_npt = npt_path if (npt_path and os.path.isfile(npt_path)) else None
-
         self.lbl_status.config(text="Đang xuất các file TNCN riêng...")
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
         self.btn_qhns.config(state=tk.DISABLED)
-        self.btn_npt.config(state=tk.DISABLED)
         self.root.update_idletasks()
 
         def worker() -> None:
@@ -662,18 +653,15 @@ class TaxXmlToExcelApp:
                 for d in latest_tncn:
                     yr = d.year or d.ky_kkhai
                     fn = os.path.join(out_dir, f"QTT_TNCN_{yr}.xlsx")
-                    write_single_year_tncn_file(fn, d, tms_npt_path=valid_npt)
+                    write_single_year_tncn_file(fn, d)
                     created.append(fn)
 
                 def on_done() -> None:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
                     self.btn_qhns.config(state=tk.NORMAL)
-                    self.btn_npt.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Xuất file TNCN thành công!")
                     msg = "Đã xuất thành công các file TNCN riêng (gồm đủ 4 sheet: TK, 05-1, 05-2, 05-3):\n" + "\n".join(created)
-                    if valid_npt:
-                        msg += "\n\nĐã tự động đối chiếu Người phụ thuộc (05-3 vs TMS) kèm sheet DoiChieu_NPT & DS_NPT_HeThong!"
                     messagebox.showinfo("Hoàn tất", msg)
                     if open_after and created:
                         try:
@@ -687,75 +675,8 @@ class TaxXmlToExcelApp:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
                     self.btn_qhns.config(state=tk.NORMAL)
-                    self.btn_npt.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Lỗi khi xuất file TNCN!")
                     messagebox.showerror("Lỗi", f"Không thể xuất file TNCN:\n{exc}")
-
-                self.root.after(0, on_err)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def run_npt_standalone(self) -> None:
-        """Đối chiếu trực tiếp Người phụ thuộc (05-3 vs file TMS) vào file Excel TNCN đã xuất sẵn."""
-        excel_path = filedialog.askopenfilename(
-            title="Bước 1/2: Chọn file Excel TNCN có sheet '05-3' (VD: QTT_TNCN_2024.xlsx)",
-            filetypes=[("Excel Workbook", "*.xlsx")],
-        )
-        if not excel_path:
-            return
-
-        npt_path = self.var_npt_path.get().strip()
-        if not npt_path or not os.path.isfile(npt_path):
-            npt_path = filedialog.askopenfilename(
-                title="Bước 2/2: Chọn file dữ liệu Người phụ thuộc kết xuất từ TMS (.xlsx hoặc .csv)",
-                filetypes=[("Excel / CSV", "*.xlsx *.csv"), ("Excel Workbook", "*.xlsx"), ("CSV", "*.csv"), ("All files", "*.*")],
-            )
-            if not npt_path:
-                return
-            self.var_npt_path.set(os.path.normpath(npt_path))
-
-        open_after = self.var_open_after.get()
-        self.btn_export.config(state=tk.DISABLED)
-        self.btn_export_tncn.config(state=tk.DISABLED)
-        self.btn_qhns.config(state=tk.DISABLED)
-        self.btn_npt.config(state=tk.DISABLED)
-        self.lbl_status.config(text="Đang đối chiếu NPT (05-3 vs TMS)...")
-        self.root.update_idletasks()
-
-        def worker() -> None:
-            try:
-                stats = reconcile_npt_file(excel_path, npt_path, output_path=excel_path)
-
-                def on_done() -> None:
-                    self.btn_export.config(state=tk.NORMAL)
-                    self.btn_export_tncn.config(state=tk.NORMAL)
-                    self.btn_qhns.config(state=tk.NORMAL)
-                    self.btn_npt.config(state=tk.NORMAL)
-                    self.lbl_status.config(text="Đối chiếu NPT thành công!")
-                    msg = (
-                        f"Đã hoàn tất đối chiếu Người phụ thuộc (05-3 vs TMS) vào file:\n{excel_path}\n\n"
-                        f"• Tổng số dòng 05-3: {stats['total_rows']}\n"
-                        f"• Số dòng KHỚP: {stats['matched']}\n"
-                        f"• Số dòng CHÊNH LỆCH / CẦN KIỂM TRA: {stats['issues']}\n"
-                        f"• Tổng số tháng loại trừ: {stats['total_diff_months']} tháng\n"
-                        f"• Tổng tiền giảm trừ loại trừ: {stats['total_disallowed_amount']:,.0f} đ"
-                    )
-                    messagebox.showinfo("Hoàn tất đối chiếu NPT", msg)
-                    if open_after:
-                        try:
-                            os.startfile(excel_path)
-                        except Exception:
-                            pass
-
-                self.root.after(0, on_done)
-            except Exception as exc:
-                def on_err() -> None:
-                    self.btn_export.config(state=tk.NORMAL)
-                    self.btn_export_tncn.config(state=tk.NORMAL)
-                    self.btn_qhns.config(state=tk.NORMAL)
-                    self.btn_npt.config(state=tk.NORMAL)
-                    self.lbl_status.config(text="Lỗi khi đối chiếu NPT!")
-                    messagebox.showerror("Lỗi", f"Không thể đối chiếu Người phụ thuộc:\n{exc}")
 
                 self.root.after(0, on_err)
 

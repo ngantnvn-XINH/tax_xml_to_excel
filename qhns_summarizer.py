@@ -367,11 +367,11 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
     return metrics
 
 
-def _copy_tq_sheet(wb_dst: openpyxl.Workbook, ws_src) -> None:
-    """Chép toàn bộ sheet TQ từ file nguồn sang workbook đích."""
-    if "TQ" in wb_dst.sheetnames:
-        del wb_dst["TQ"]
-    ws_dst = wb_dst.create_sheet("TQ")
+def _copy_tq_sheet(wb_dst: openpyxl.Workbook, ws_src, sheet_name: str = "TQ") -> None:
+    """Chép toàn bộ sheet TQ (hoặc TQ_NTNN) từ file nguồn sang workbook đích."""
+    if sheet_name in wb_dst.sheetnames:
+        del wb_dst[sheet_name]
+    ws_dst = wb_dst.create_sheet(sheet_name)
 
     for r in range(1, ws_src.max_row + 1):
         for c in range(1, ws_src.max_column + 1):
@@ -525,6 +525,7 @@ def integrate_tq_and_qhns_into_workbook(
     year_to: Optional[int] = None,
     output_path: Optional[str] = None,
     cutoff_date: Optional[datetime.date] = None,
+    tq_ntnn_excel_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Hàm tích hợp chính:
@@ -567,8 +568,25 @@ def integrate_tq_and_qhns_into_workbook(
     metrics = compute_tq_metrics(tq_rows, start_year, end_year)
     decl_vals = _eval_year_sheet_values(excel_path, years)
 
-    # 3. Chép sheet TQ vào workbook đích
-    _copy_tq_sheet(wb, ws_tq_src)
+    # 2b. Đọc Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) nếu người dùng cung cấp
+    ntnn_metrics: Optional[Dict[str, Any]] = None
+    ws_ntnn_src = None
+    if tq_ntnn_excel_path and os.path.isfile(tq_ntnn_excel_path):
+        wb_ntnn = openpyxl.load_workbook(tq_ntnn_excel_path, data_only=True)
+        for cand in wb_ntnn.sheetnames:
+            if cand.strip().upper() in ("TQ", "TQ_NTNN", "TONG QUAN", "TỔNG QUAN", "NTNN"):
+                ws_ntnn_src = wb_ntnn[cand]
+                break
+        if ws_ntnn_src is None:
+            ws_ntnn_src = wb_ntnn[wb_ntnn.sheetnames[0]]
+        ntnn_rows = parse_tq_rows(ws_ntnn_src)
+        if ntnn_rows:
+            ntnn_metrics = compute_tq_metrics(ntnn_rows, start_year, end_year)
+
+    # 3. Chép sheet TQ (và TQ_NTNN nếu có) vào workbook đích
+    _copy_tq_sheet(wb, ws_tq_src, sheet_name="TQ")
+    if ws_ntnn_src is not None and ntnn_metrics is not None:
+        _copy_tq_sheet(wb, ws_ntnn_src, sheet_name="TQ_NTNN")
 
     # 4. Cập nhật cột đối chiếu F, G và Comment trên từng sheet năm
     num_fmt = "#,##0"
@@ -663,6 +681,26 @@ def integrate_tq_and_qhns_into_workbook(
         ws_y.column_dimensions["F"].width = 18
         ws_y.column_dimensions["G"].width = 18
 
+        # --- Dòng 97 & 98: Đối chiếu Thuế Nhà thầu (GTGT 1701 & TNDN 1052) trên TQ_NTNN nếu có ---
+        if ntnn_metrics is not None:
+            f97_val = round(ntnn_metrics["gtgt_tk_by_ky"][y])
+            f98_val = round(ntnn_metrics["tndn_tk_qt_by_ky"][y])
+            ws_y["F97"].value = f97_val
+            ws_y["F97"].number_format = num_fmt
+            ws_y["F97"].font = font_bold
+            ws_y["F97"].comment = Comment("Phát sinh Thuế GTGT Nhà thầu (TM 1701) trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)", "QHNS")
+            ws_y["G97"].value = "=C97-F97"
+            ws_y["G97"].number_format = num_fmt
+            ws_y["G97"].font = font_bold
+
+            ws_y["F98"].value = f98_val
+            ws_y["F98"].number_format = num_fmt
+            ws_y["F98"].font = font_bold
+            ws_y["F98"].comment = Comment("Phát sinh Thuế TNDN Nhà thầu (TM 1052) trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)", "QHNS")
+            ws_y["G98"].value = "=C98-F98"
+            ws_y["G98"].number_format = num_fmt
+            ws_y["G98"].font = font_bold
+
     # 5. Xây dựng sheet QHNS chuẩn 01 biểu duy nhất
     if "QHNS" in wb.sheetnames:
         del wb["QHNS"]
@@ -715,9 +753,9 @@ def integrate_tq_and_qhns_into_workbook(
     gtgt_e_cells: List[str] = []
     tndn_e_cells: List[str] = []
     special_nop_notes = metrics.get("special_nop_notes", {})
-    opening_bb: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0}
-    rounding_diff: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0}
-    rounding_diff_refs: Dict[str, List[str]] = {"1701": [], "1052": [], "1001": [], "LPMB": []}
+    opening_bb: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0, "NT_1701": 0, "NT_1052": 0}
+    rounding_diff: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0, "NT_1701": 0, "NT_1052": 0}
+    rounding_diff_refs: Dict[str, List[str]] = {"1701": [], "1052": [], "1001": [], "LPMB": [], "NT_1701": [], "NT_1052": []}
     last_rows: Dict[str, int] = {}
     cur_r = 4
 
@@ -918,14 +956,52 @@ def integrate_tq_and_qhns_into_workbook(
             )
         ws_q.cell(r_tn, 7, f"=C{r_tn}+D{r_tn}+E{r_tn}-F{r_tn}")
 
-        # 5) Thuế nhà thầu (Tổng + GTGT + TNDN)
+        # 5) Thuế nhà thầu (Tổng + GTGT + TNDN) — tự động đổ số liệu từ TQ_NTNN nếu có
         r_nt = this_rows["nt_tong"]
         r_nt_g = this_rows["nt_gtgt"]
         r_nt_t = this_rows["nt_tndn"]
-        if y_idx > 0:
-            ws_q.cell(r_nt, 3, f"=G{prev_rows['nt_tong']}")
-            ws_q.cell(r_nt_g, 3, f"=G{prev_rows['nt_gtgt']}")
-            ws_q.cell(r_nt_t, 3, f"=G{prev_rows['nt_tndn']}")
+        if ntnn_metrics is not None:
+            ntnn_sp = ntnn_metrics.get("special_nop_notes", {})
+            if y_idx == 0:
+                open_ntg = max(0, round(ntnn_metrics["opening_exact"]["1701"]))
+                open_ntt = max(0, round(ntnn_metrics["opening_exact"]["1052"]))
+                opening_bb["NT_1701"] = open_ntg
+                opening_bb["NT_1052"] = open_ntt
+                ws_q.cell(r_nt_g, 3, open_ntg)
+                ws_q.cell(r_nt_t, 3, open_ntt)
+                ws_q.cell(r_nt, 3, f"=C{r_nt_g}+C{r_nt_t}")
+            else:
+                ws_q.cell(r_nt, 3, f"=G{prev_rows['nt_tong']}")
+                ws_q.cell(r_nt_g, 3, f"=G{prev_rows['nt_gtgt']}")
+                ws_q.cell(r_nt_t, 3, f"=G{prev_rows['nt_tndn']}")
+
+            ntg_ps = round(ntnn_metrics["gtgt_tk_by_ky"][y])
+            ntg_nop = round(ntnn_metrics["gtgt_c2_by_ht"][y])
+            ntt_ps = round(ntnn_metrics["tndn_tk_qt_by_ky"][y])
+            ntt_nop = round(ntnn_metrics["tndn_c2_by_ht"][y])
+
+            ws_q.cell(r_nt_g, 4, ntg_ps)
+            ws_q.cell(r_nt_g, 6, ntg_nop)
+            if ntnn_sp.get(("1701", y)):
+                ws_q.cell(r_nt_g, 6).comment = Comment(
+                    "GD C2 + NT/HC/C5 trên TQ_NTNN (bao gồm: " + "; ".join(ntnn_sp[("1701", y)]) + ")",
+                    "QHNS",
+                )
+            ws_q.cell(r_nt_t, 4, ntt_ps)
+            ws_q.cell(r_nt_t, 6, ntt_nop)
+            if ntnn_sp.get(("1052", y)):
+                ws_q.cell(r_nt_t, 6).comment = Comment(
+                    "GD C2 + NT/HC trên TQ_NTNN (bao gồm: " + "; ".join(ntnn_sp[("1052", y)]) + ")",
+                    "QHNS",
+                )
+            ws_q.cell(r_nt, 4, f"=D{r_nt_g}+D{r_nt_t}")
+            ws_q.cell(r_nt, 5, f"=E{r_nt_g}+E{r_nt_t}")
+            ws_q.cell(r_nt, 6, f"=F{r_nt_g}+F{r_nt_t}")
+        else:
+            if y_idx > 0:
+                ws_q.cell(r_nt, 3, f"=G{prev_rows['nt_tong']}")
+                ws_q.cell(r_nt_g, 3, f"=G{prev_rows['nt_gtgt']}")
+                ws_q.cell(r_nt_t, 3, f"=G{prev_rows['nt_tndn']}")
         ws_q.cell(r_nt, 7, f"=G{r_nt_g}+G{r_nt_t}")
         ws_q.cell(r_nt_g, 7, f"=C{r_nt_g}+D{r_nt_g}+E{r_nt_g}-F{r_nt_g}")
         ws_q.cell(r_nt_t, 7, f"=C{r_nt_t}+D{r_nt_t}+E{r_nt_t}-F{r_nt_t}")
@@ -1073,11 +1149,13 @@ def integrate_tq_and_qhns_into_workbook(
     ws_dc.row_dimensions[2].height = 34
 
     other_tms = metrics.get("other_tms", [])
+    ntnn_other_tms = ntnn_metrics.get("other_tms", []) if ntnn_metrics is not None else []
+    ntnn_core_count = 2 if ntnn_metrics is not None else 0
 
     # Xây dựng Bảng 2 trước trong bộ nhớ vị trí để Bảng 1 có thể link trực tiếp sang số dư năm cuối của các tiểu mục khác
     b1_start_row = 3
-    b1_core_count = 4
-    b1_total_rows = b1_core_count + len(other_tms)
+    b1_core_count = 4 + ntnn_core_count
+    b1_total_rows = b1_core_count + len(other_tms) + len(ntnn_other_tms)
     b1_sum_row = b1_start_row + b1_total_rows
     b2_title_row = b1_sum_row + 2
     b2_header_row = b2_title_row + 1
@@ -1109,15 +1187,31 @@ def integrate_tq_and_qhns_into_workbook(
         cell.fill = header_fill
     ws_dc.row_dimensions[b2_header_row].height = 30
 
-    b2_rows_spec: List[Tuple[str, str, str, Dict[int, float], Dict[int, float]]] = [
-        ("1701", "1", "Thuế GTGT (1701)", metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"]),
-        ("1052", "2", "Thuế TNDN (1052)", metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"]),
-        ("1001", "3", "Thuế TNCN (1001)", metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"]),
-        ("LPMB", "4", "Lệ phí môn bài (2862/2863/2864)", metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"]),
+    b2_rows_spec: List[Tuple[str, str, str, Dict[int, float], Dict[int, float], float]] = [
+        ("1701", "1", "Thuế GTGT (1701)", metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], metrics["opening_exact"]["1701"]),
+        ("1052", "2", "Thuế TNDN (1052)", metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], metrics["opening_exact"]["1052"]),
+        ("1001", "3", "Thuế TNCN (1001)", metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], metrics["opening_exact"]["1001"]),
+        ("LPMB", "4", "Lệ phí môn bài (2862/2863/2864)", metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], metrics["opening_exact"]["LPMB"]),
     ]
-    for idx_o, o_tm in enumerate(other_tms, start=5):
-        o_name = TIEU_MUC_NAMES.get(o_tm, f"Khoản thu khác")
-        b2_rows_spec.append((o_tm, str(idx_o), f"{o_name} ({o_tm})", metrics["other_ps_by_ky"][o_tm], metrics["other_nop_by_ht"][o_tm]))
+    next_stt = 5
+    if ntnn_metrics is not None:
+        b2_rows_spec.append(
+            ("NT_1701", str(next_stt), "Thuế GTGT Nhà thầu (1701 - TQ_NTNN)", ntnn_metrics["gtgt_tk_by_ky"], ntnn_metrics["gtgt_c2_by_ht"], ntnn_metrics["opening_exact"]["1701"])
+        )
+        next_stt += 1
+        b2_rows_spec.append(
+            ("NT_1052", str(next_stt), "Thuế TNDN Nhà thầu (1052 - TQ_NTNN)", ntnn_metrics["tndn_tk_qt_by_ky"], ntnn_metrics["tndn_c2_by_ht"], ntnn_metrics["opening_exact"]["1052"])
+        )
+        next_stt += 1
+    for o_tm in other_tms:
+        o_name = TIEU_MUC_NAMES.get(o_tm, "Khoản thu khác")
+        b2_rows_spec.append((o_tm, str(next_stt), f"{o_name} ({o_tm})", metrics["other_ps_by_ky"][o_tm], metrics["other_nop_by_ht"][o_tm], metrics["opening_exact"][o_tm]))
+        next_stt += 1
+    if ntnn_metrics is not None:
+        for o_tm in ntnn_other_tms:
+            o_name = TIEU_MUC_NAMES.get(o_tm, "Khoản thu khác NTNN")
+            b2_rows_spec.append((f"NT_{o_tm}", str(next_stt), f"{o_name} ({o_tm} - TQ_NTNN)", ntnn_metrics["other_ps_by_ky"][o_tm], ntnn_metrics["other_nop_by_ht"][o_tm], ntnn_metrics["opening_exact"][o_tm]))
+            next_stt += 1
 
     dc_r = b2_data_start
     dc_prev: Dict[str, int] = {}
@@ -1131,12 +1225,12 @@ def integrate_tq_and_qhns_into_workbook(
         dc_r += 1
 
         dc_this: Dict[str, int] = {}
-        for tm_key, stt, label, ps_map, nop_map in b2_rows_spec:
+        for tm_key, stt, label, ps_map, nop_map, open_ex in b2_rows_spec:
             dc_this[tm_key] = dc_r
             ws_dc.cell(dc_r, 1, stt).alignment = align_center
             ws_dc.cell(dc_r, 2, label).alignment = align_left
             if y_idx == 0:
-                ws_dc.cell(dc_r, 3, round(metrics["opening_exact"][tm_key]))
+                ws_dc.cell(dc_r, 3, round(open_ex))
             else:
                 ws_dc.cell(dc_r, 3, f"=G{dc_prev[tm_key]}")
             ws_dc.cell(dc_r, 4, round(ps_map[y]))
@@ -1155,23 +1249,33 @@ def integrate_tq_and_qhns_into_workbook(
         if y_idx == len(years) - 1:
             dc_last_year_rows = dc_this
 
-    # --- ĐIỀN BẢNG 1: TỔNG HỢP ĐỐI CHIẾU CUỐI KỲ TẤT CẢ SẮC THUẾ (BIÊN BẢN QHNS <-> THỰC TẾ SỔ TQ) ---
+    # --- ĐIỀN BẢNG 1: TỔNG HỢP ĐỐI CHIẾU CUỐI KỲ TẤT CẢ SẮC THUẾ (BIÊN BẢN QHNS <-> THỰC TẾ SỔ TQ & TQ_NTNN) ---
     dc_specs = [
-        ("Thuế GTGT", "1701", last_rows.get("gtgt"), gtgt_e_cells, metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], True),
-        ("Thuế TNDN", "1052", last_rows.get("tndn"), tndn_e_cells, metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], True),
-        ("Thuế TNCN", "1001", last_rows.get("tncn"), tncn_e_cells, metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], True),
-        ("Lệ phí môn bài", "LPMB", last_rows.get("lpmb"), [], metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], True),
+        ("Thuế GTGT", "1701", "1701", last_rows.get("gtgt"), gtgt_e_cells, metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], metrics["opening_exact"]["1701"], True),
+        ("Thuế TNDN", "1052", "1052", last_rows.get("tndn"), tndn_e_cells, metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], metrics["opening_exact"]["1052"], True),
+        ("Thuế TNCN", "1001", "1001", last_rows.get("tncn"), tncn_e_cells, metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], metrics["opening_exact"]["1001"], True),
+        ("Lệ phí môn bài", "LPMB", "2862/2863/2864", last_rows.get("lpmb"), [], metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], metrics["opening_exact"]["LPMB"], True),
     ]
+    if ntnn_metrics is not None:
+        dc_specs.append(
+            ("Thuế GTGT Nhà thầu (TQ_NTNN)", "NT_1701", "1701 (NTNN)", last_rows.get("nt_gtgt"), [], ntnn_metrics["gtgt_tk_by_ky"], ntnn_metrics["gtgt_c2_by_ht"], ntnn_metrics["opening_exact"]["1701"], True)
+        )
+        dc_specs.append(
+            ("Thuế TNDN Nhà thầu (TQ_NTNN)", "NT_1052", "1052 (NTNN)", last_rows.get("nt_tndn"), [], ntnn_metrics["tndn_tk_qt_by_ky"], ntnn_metrics["tndn_c2_by_ht"], ntnn_metrics["opening_exact"]["1052"], True)
+        )
     for o_tm in other_tms:
         o_name = TIEU_MUC_NAMES.get(o_tm, f"Tiểu mục {o_tm}")
-        dc_specs.append((o_name, o_tm, None, [], metrics["other_ps_by_ky"][o_tm], metrics["other_nop_by_ht"][o_tm], False))
+        dc_specs.append((o_name, o_tm, o_tm, None, [], metrics["other_ps_by_ky"][o_tm], metrics["other_nop_by_ht"][o_tm], metrics["opening_exact"][o_tm], False))
+    if ntnn_metrics is not None:
+        for o_tm in ntnn_other_tms:
+            o_name = TIEU_MUC_NAMES.get(o_tm, f"Tiểu mục {o_tm}")
+            dc_specs.append((f"{o_name} (TQ_NTNN)", f"NT_{o_tm}", f"{o_tm} (NTNN)", None, [], ntnn_metrics["other_ps_by_ky"][o_tm], ntnn_metrics["other_nop_by_ht"][o_tm], ntnn_metrics["opening_exact"][o_tm], False))
 
     dc_r = b1_start_row
-    for label, tm_key, r_last_q, e_cells, ps_map, nop_map, is_on_qhns in dc_specs:
-        tm_disp = "2862/2863/2864" if tm_key == "LPMB" else tm_key
-        open_exact_val = round(metrics["opening_exact"][tm_key])
+    for label, tm_key, tm_disp, r_last_q, e_cells, ps_map, nop_map, open_ex_raw, is_on_qhns in dc_specs:
+        open_exact_val = round(open_ex_raw)
         tq_close_val = round(
-            metrics["opening_exact"][tm_key]
+            open_ex_raw
             + sum(ps_map.values())
             - sum(nop_map.values())
         )
