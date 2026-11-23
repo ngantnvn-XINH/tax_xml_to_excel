@@ -533,12 +533,14 @@ class TaxXmlToExcelApp:
 
                 self.root.after(0, on_done)
             except Exception as exc:
-                def on_err() -> None:
+                err_msg = str(exc)
+
+                def on_err(msg: str = err_msg) -> None:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
                     self.btn_qhns.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Lỗi khi xuất Excel!")
-                    messagebox.showerror("Lỗi", f"Không thể xuất file Excel:\n{exc}")
+                    messagebox.showerror("Lỗi", f"Không thể xuất file Excel:\n{msg}")
 
                 self.root.after(0, on_err)
 
@@ -610,12 +612,14 @@ class TaxXmlToExcelApp:
 
                 self.root.after(0, on_done)
             except Exception as exc:
-                def on_err() -> None:
+                err_msg = str(exc)
+
+                def on_err(msg: str = err_msg) -> None:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
                     self.btn_qhns.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Lỗi khi lên biểu QHNS!")
-                    messagebox.showerror("Lỗi", f"Không thể lập biểu QHNS:\n{exc}")
+                    messagebox.showerror("Lỗi", f"Không thể lập biểu QHNS:\n{msg}")
 
                 self.root.after(0, on_err)
 
@@ -671,12 +675,14 @@ class TaxXmlToExcelApp:
 
                 self.root.after(0, on_done)
             except Exception as exc:
-                def on_err() -> None:
+                err_msg = str(exc)
+
+                def on_err(msg: str = err_msg) -> None:
                     self.btn_export.config(state=tk.NORMAL)
                     self.btn_export_tncn.config(state=tk.NORMAL)
                     self.btn_qhns.config(state=tk.NORMAL)
                     self.lbl_status.config(text="Lỗi khi xuất file TNCN!")
-                    messagebox.showerror("Lỗi", f"Không thể xuất file TNCN:\n{exc}")
+                    messagebox.showerror("Lỗi", f"Không thể xuất file TNCN:\n{msg}")
 
                 self.root.after(0, on_err)
 
