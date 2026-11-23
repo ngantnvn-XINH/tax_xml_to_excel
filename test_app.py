@@ -955,7 +955,8 @@ class TestTaxXmlToExcel(unittest.TestCase):
             ws_tq.append(["7901", "2401", "2", "C2", "1701", "VND", -10_000_000, datetime.datetime(2024, 2, 25)])
             ws_tq.append(["7901", "24CN", "3", "QT", "1052", "VND", 20_000_000, datetime.datetime(2025, 3, 31)])
             ws_tq.append(["7901", "24CN", "4", "C2", "1052", "VND", -20_000_000, datetime.datetime(2024, 12, 25)])
-            ws_tq.append(["7901", "24CN", "5", "TK", "1001", "VND", 5_000_000, datetime.datetime(2025, 3, 31)])
+            ws_tq.append(["7901", "24CN", "5", "TK", "1001", "VND", 6_000_000, datetime.datetime(2025, 3, 31)])
+            ws_tq.append(["7901", "24CN", "5b", "PP", "1001", "VND", -1_000_000, datetime.datetime(2024, 12, 20)])
             ws_tq.append(["7901", "24CN", "6", "C2", "1001", "VND", -5_000_000, datetime.datetime(2024, 12, 25)])
             tq_path = os.path.join(tmpdir, "tq_main.xlsx")
             wb_tq.save(tq_path)
@@ -979,6 +980,8 @@ class TestTaxXmlToExcel(unittest.TestCase):
 
             wb_out = openpyxl.load_workbook(out_path, data_only=False)
             self.assertIn("TQ_NTNN", wb_out.sheetnames)
+            # Kiểm tra phát sinh TNCN (1001) đã cộng cả giao dịch PP (6,000,000 TK - 1,000,000 PP = 5,000,000)
+            self.assertEqual(wb_out["2024"]["F90"].value, 5_000_000)
             # Kiểm tra đối chiếu dòng 97 & 98 trên sheet 2024
             self.assertEqual(wb_out["2024"]["F97"].value, 12_000_000)
             self.assertEqual(wb_out["2024"]["F98"].value, 8_000_000)

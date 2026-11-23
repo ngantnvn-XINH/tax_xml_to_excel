@@ -272,8 +272,8 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
                     metrics["dk_tncn_c2_prev"] += payment_amount(item)
                     if ky and ky not in metrics["dk_tncn_c2_notes"]:
                         metrics["dk_tncn_c2_notes"].append(ky)
-                elif gd in ("TQ", "TH") and ky == f"{prev_yy}CN":
-                    metrics["dk_tncn_qt_prev"] += val
+                elif gd in ("TQ", "TH", "PP") and ky == f"{prev_yy}CN":
+                    metrics["dk_tncn_qt_prev"] += ledger_signed_amount(item)
                     if ky and ky not in metrics["dk_tncn_qt_notes"]:
                         metrics["dk_tncn_qt_notes"].append(ky)
             elif tm == "1052":
@@ -295,10 +295,10 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
             elif tm == "1052" and gd in ("TK", "TQ", "QT"):
                 metrics["tndn_tk_qt_by_ky"][ky_y] += val
                 in_bucket_a = True
-            elif tm == "1001" and gd in ("TK", "TH", "TQ"):
-                metrics["tncn_tk_th_tq_by_ky"][ky_y] += val
+            elif tm == "1001" and gd in ("TK", "TH", "TQ", "PP"):
+                metrics["tncn_tk_th_tq_by_ky"][ky_y] += ledger_signed_amount(item)
                 in_bucket_a = True
-                if gd == "TK" and ky:
+                if gd in ("TK", "PP") and ky:
                     metrics["tncn_tk_periods"][ky_y].add(ky)
             elif tm in LPMB_TMS and gd in ("TK", "TQ", "QT"):
                 metrics["lpmb_ps_by_ky"][ky_y] += val
@@ -671,11 +671,11 @@ def integrate_tq_and_qhns_into_workbook(
         if diff_tncn > 1000:
             missing_p = sorted(metrics["tncn_c2_periods"][y] - metrics["tncn_tk_periods"][y])
             miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
-            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ trên tổng quan rà soát thiếu TK {miss_str}", "QHNS")
+            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan rà soát thiếu TK {miss_str}", "QHNS")
             tncn_missing_info[y] = miss_str
             alerts.append(f"Năm {y} - Thuế TNCN: Tờ khai QTT ({c90_val:,.0f}) > Tổng quan ({f90_val:,.0f}), chênh lệch {diff_tncn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra (thiếu TK {miss_str}).")
         else:
-            ws_y["F90"].comment = Comment("Phát sinh TK; TH; TQ trên tổng quan", "QHNS")
+            ws_y["F90"].comment = Comment("Phát sinh TK; TH; TQ; PP trên tổng quan", "QHNS")
             tncn_missing_info[y] = None
 
         ws_y.column_dimensions["F"].width = 18
