@@ -155,8 +155,14 @@ def normalize_mst(val: Optional[str]) -> str:
 
 
 def classify_tax_type(ma_tkhai: str, ten_tkhai: str) -> str:
-    """Phân loại tờ khai thành GTGT, TNCN, TNDN, BCTC hoặc Khác."""
+    """Phân loại tờ khai thành GTGT, TNCN, TNDN, BCTC hoặc Khác (ưu tiên tách riêng Nhà thầu NTNN trước GTGT/TNDN)."""
     combined = f"{ma_tkhai} {ten_tkhai}".upper()
+    if (
+        "NTNN" in combined
+        or "NHÀ THẦU" in combined
+        or "NHA THAU" in combined
+    ):
+        return "Khác"
     if (
         "BCTC" in combined
         or "BÁO CÁO TÀI CHÍNH" in combined

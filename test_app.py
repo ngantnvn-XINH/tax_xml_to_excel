@@ -997,6 +997,12 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(dc_map.get("1701 (NTNN)"), 0)
             self.assertEqual(dc_map.get("1052 (NTNN)"), 2_000_000)
 
+            # Kiểm tra phân loại tờ khai Nhà thầu (NTNN) tuyệt đối không bị trộn nhầm sang GTGT hay TNDN
+            from tax_parser import classify_tax_type
+            self.assertEqual(classify_tax_type("01/NTNN", "Tờ khai thuế nhà thầu nước ngoài (GTGT, TNDN)"), "Khác")
+            self.assertEqual(classify_tax_type("03/NTNN", "Tờ khai thuế thu nhập doanh nghiệp nhà thầu nước ngoài"), "Khác")
+            self.assertEqual(classify_tax_type("02/NTNN", "Tờ khai quyết toán thuế nhà thầu nước ngoài"), "Khác")
+
 
 if __name__ == "__main__":
     unittest.main()
