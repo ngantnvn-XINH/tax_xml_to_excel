@@ -419,24 +419,31 @@ def _sort_key_ntnn(d: TaxDeclaration) -> Tuple[int, datetime.date, str, int, dat
 def is_ntnn_per_occurrence(d: TaxDeclaration) -> bool:
     """
     Phân biệt tờ khai Thuế Nhà Thầu kê khai theo LẦN PHÁT SINH (THEO NGÀY) với kê khai theo THÁNG/QUÝ/NĂM:
-    - Trả về True (lần phát sinh theo ngày) nếu:
-        * Thẻ XML <kieuKy> == 'D'
-        * Hoặc ky_kkhai có dạng ngày cụ thể (dd/mm/yyyy, yyyy-mm-dd, dd-mm-yyyy)
-        * Hoặc tu_ngay == den_ngay (kỳ 1 ngày duy nhất)
+    - Trả về True (lần phát sinh -> GIỮ & CỘNG TẤT CẢ Chính thức + Bổ sung) nếu:
+        * Thẻ XML <kieuKy> thuộc ('D', 'P', 'L', 'PS')
+        * Hoặc ky_kkhai chứa ngày đầy đủ (VD: '15/06/2024', 'D/15/06/2024', 'P/15/06/2024', '2024-06-15')
+        * Hoặc khoảng thời gian tu_ngay..den_ngay ngắn hơn 20 ngày (VD tu_ngay == den_ngay, không phải kỳ tháng/quý/năm)
+        * Hoặc chỉ có tu_ngay mà ngày bắt đầu != ngày 1 đầu tháng
     - Trả về False nếu kê khai theo tháng ('06/2024', tu_ngay=01..30), quý ('Q2/2024') hoặc năm ('2024').
     """
     kieu_ky = str((d.indicators or {}).get("_kieu_ky") or "").strip().upper()
-    if kieu_ky == "D":
+    if kieu_ky in ("D", "P", "L", "PS"):
         return True
-    if kieu_ky in ("M", "Q", "Y"):
-        return False
 
     ky = str(d.ky_kkhai or "").strip()
-    if re.match(r"^(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})$", ky):
+    if re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})", ky):
         return True
 
-    if d.tu_ngay and d.den_ngay and d.tu_ngay == d.den_ngay:
+    if d.tu_ngay and d.den_ngay:
+        span_days = (d.den_ngay - d.tu_ngay).days
+        if 0 <= span_days < 20:
+            return True
+
+    if d.tu_ngay and not d.den_ngay and d.tu_ngay.day != 1:
         return True
+
+    if kieu_ky in ("M", "Q", "Y"):
+        return False
 
     return False
 
@@ -542,6 +549,8 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
 
     lan_int = int(d.so_lan) if str(d.so_lan or "").isdigit() else 0
     loai_txt = "Bổ sung" if lan_int > 0 else "Chính thức"
+    ky_mode_txt = "Lần PS" if is_ntnn_per_occurrence(d) else "Tháng/Kỳ"
+    schema_disp = f"{m['schema']} ({ky_mode_txt})"
 
     vals = [
         stt,
@@ -555,7 +564,7 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
         loai_txt,
         lan_int,
         d.ngay_lap,
-        m["schema"],
+        schema_disp,
         round(m["dt_gtgt"]),
         round(m["thue_gtgt"]),
         round(m["dt_tndn"]),

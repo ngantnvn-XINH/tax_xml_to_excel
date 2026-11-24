@@ -1544,14 +1544,25 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertFalse(is_ntnn_per_occurrence(d_m0))
         self.assertTrue(is_ntnn_per_occurrence(d_d0))
 
-        kept = filter_latest_ntnn_declarations([d_m0, d_m1, d_d0, d_d1])
+        # Kiểm tra cả trường hợp HTKK ghi kieuKy='P' hoặc 'L' hoặc ky_kkhai='P/15/06/2024'
+        d_p = TaxDeclaration(
+            file_path="dp.xml", file_name="dp.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ky_kkhai="P/15/06/2024",
+            tu_ngay=datetime.date(2024, 6, 15), den_ngay=datetime.date(2024, 6, 15),
+            ngay_lap=datetime.date(2024, 6, 26), so_lan="0",
+            indicators={"_kieu_ky": "P", "_ntnn_dt_tndn": 20_000_000, "_ntnn_thue_tndn": 1_000_000},
+        )
+        self.assertTrue(is_ntnn_per_occurrence(d_p))
+
+        kept = filter_latest_ntnn_declarations([d_m0, d_m1, d_d0, d_d1, d_p])
         kept_names = [d.file_name for d in kept]
-        # Tháng: bỏ m0, chỉ giữ m1; Lần phát sinh: giữ CẢ d0 và d1!
+        # Tháng: bỏ m0, chỉ giữ m1; Lần phát sinh: giữ CẢ d0, d1 và dp!
         self.assertNotIn("m0.xml", kept_names)
         self.assertIn("m1.xml", kept_names)
         self.assertIn("d0.xml", kept_names)
         self.assertIn("d1.xml", kept_names)
-        self.assertEqual(len(kept), 3)
+        self.assertIn("dp.xml", kept_names)
+        self.assertEqual(len(kept), 4)
 
 
 if __name__ == "__main__":
