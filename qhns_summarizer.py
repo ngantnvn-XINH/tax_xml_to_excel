@@ -2136,3 +2136,385 @@ def integrate_period_reconciliation_for_tax_type(
 
     wb.save(output_path)
     return {"output_path": output_path, "reconciled": True, "rows": len(all_keys)}
+
+
+def export_qhns_by_tax_type_period_files(
+    excel_path: str,
+    out_dir: str,
+    tq_excel_path: Optional[str] = None,
+    tq_ntnn_excel_path: Optional[str] = None,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+    target_cqt: Optional[str] = "7901",
+    base_prefix: str = "QHNS",
+) -> List[str]:
+    """
+    Xuất RIÊNG phần Quan hệ ngân sách (QHNS) đối chiếu THEO TỪNG KỲ KÊ KHAI thành từng file Excel độc lập
+    cho mỗi sắc thuế (chỉ xuất khi người dùng tích chọn):
+      - {base_prefix}_GTGT.xlsx  (TM 1701 từ TQ, đối chiếu từng tháng/quý với 'So Thue GTGT Cuoi')
+      - {base_prefix}_TNDN.xlsx  (TM 1052 từ TQ, đối chiếu theo từng kỳ báo cáo & năm với sheet năm C76)
+      - {base_prefix}_TNCN.xlsx  (TM 1001 từ TQ + PP phân bổ CQT khác, đối chiếu theo từng kỳ báo cáo & năm với C90)
+      - {base_prefix}_LPMB.xlsx  (TM 2862/2863/2864 từ TQ theo từng kỳ)
+      - {base_prefix}_NTNN.xlsx  (TM 1701 & 1052 từ TQ_NTNN, đối chiếu từng kỳ với 'So Thue NTNN Cuoi')
+    Mỗi file gồm 2 sheet:
+      1. 'QHNS_TheoKy': Số dư đầu kỳ trước start_year + đối chiếu từng kỳ kê khai (Phát sinh TK, Phát sinh TQ,
+         Chênh lệch, Đã nộp theo kỳ, Còn phải nộp kỳ, Dư lũy kế TQ, Trạng thái).
+      2. 'ChiTiet_TQ': Toàn bộ dòng giao dịch gốc trên Sổ TQ của đúng sắc thuế đó (đã lọc đúng target_cqt).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    norm_cqt = _normalize_cqt(target_cqt)
+
+    def _load_tq_rows(path: Optional[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        if not path or not os.path.isfile(path):
+            return [], []
+        wb_src = openpyxl.load_workbook(path, data_only=True)
+        ws_src = None
+        for cand in wb_src.sheetnames:
+            if cand.strip().upper() in ("TQ", "TQ_NTNN", "TONG QUAN", "TỔNG QUAN", "NTNN"):
+                ws_src = wb_src[cand]
+                break
+        if ws_src is None:
+            ws_src = wb_src[wb_src.sheetnames[0]]
+        all_r = parse_tq_rows(ws_src)
+        return split_tq_rows_by_cqt(all_r, norm_cqt)
+
+    main_tq, other_tq = _load_tq_rows(tq_excel_path)
+    main_ntnn, _other_ntnn = _load_tq_rows(tq_ntnn_excel_path)
+
+    wb_decl = openpyxl.load_workbook(excel_path, data_only=False) if (excel_path and os.path.isfile(excel_path)) else None
+    wb_decl_v = openpyxl.load_workbook(excel_path, data_only=True) if (excel_path and os.path.isfile(excel_path)) else None
+
+    detected_years = sorted([int(s) for s in wb_decl.sheetnames if re.fullmatch(r"20\d{2}", s)]) if wb_decl else []
+    if year_from is not None and year_to is not None and year_from <= year_to:
+        years = list(range(year_from, year_to + 1))
+    elif detected_years:
+        years = detected_years
+    else:
+        src_yr = main_tq or main_ntnn
+        ht_yrs = sorted({x["ht_year"] for x in src_yr if 2015 <= x["ht_year"] <= 2035})
+        years = ht_yrs[-6:] if len(ht_yrs) > 6 else ht_yrs
+    if not years:
+        return []
+    start_year, end_year = years[0], years[-1]
+
+    # Chuẩn bị bản đồ số kê khai theo từng kỳ từ workbook tổng hợp
+    decl_gtgt_by_pk: Dict[Tuple[int, int, int, str], float] = {}
+    decl_ntnn_by_pk_tm: Dict[Tuple[Tuple[int, int, int, str], str], float] = defaultdict(float)
+    decl_tndn_by_yr: Dict[int, float] = {}
+    decl_tncn_by_yr: Dict[int, float] = {}
+
+    if wb_decl is not None and wb_decl_v is not None:
+        if "So Thue GTGT Cuoi" in wb_decl.sheetnames:
+            ws_g = wb_decl["So Thue GTGT Cuoi"]
+            gtgt_col = "AJ"
+            for ci in range(1, ws_g.max_column + 1):
+                h_txt = str(ws_g.cell(1, ci).value or "")
+                if "(40)" in h_txt and "(40a)" not in h_txt and "(40b)" not in h_txt:
+                    gtgt_col = get_column_letter(ci)
+                    break
+            for r in range(3, ws_g.max_row + 1):
+                if "tổng cộng" in str(ws_g.cell(r, 5).value or "").lower():
+                    continue
+                ky_raw = str(ws_g.cell(r, 7).value or "").strip()
+                if not ky_raw:
+                    continue
+                pk = normalize_period_key(ky_raw)
+                if start_year <= pk[0] <= end_year:
+                    decl_gtgt_by_pk[pk] = _eval_simple_formula(wb_decl, wb_decl_v, "So Thue GTGT Cuoi", f"{gtgt_col}{r}")
+
+        if "So Thue NTNN Cuoi" in wb_decl.sheetnames:
+            ws_n = wb_decl["So Thue NTNN Cuoi"]
+            for r in range(2, ws_n.max_row + 1):
+                ky_raw = str(ws_n.cell(r, 6).value or "").strip()
+                if not ky_raw or "tổng cộng" in ky_raw.lower():
+                    continue
+                pk = normalize_period_key(ky_raw)
+                if start_year <= pk[0] <= end_year:
+                    decl_ntnn_by_pk_tm[(pk, "1701")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"N{r}")
+                    decl_ntnn_by_pk_tm[(pk, "1052")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"P{r}")
+
+        for y in years:
+            sname = str(y)
+            if sname in wb_decl.sheetnames:
+                decl_tndn_by_yr[y] = _eval_simple_formula(wb_decl, wb_decl_v, sname, "C76")
+                decl_tncn_by_yr[y] = _eval_simple_formula(wb_decl, wb_decl_v, sname, "C90")
+
+    payment_gds = ("C2", "HC", "NT", "C5")
+    lpmb_tms = ("2862", "2863", "2864", "1801", "1802", "1803", "1804")
+
+    def _build_single_tax_qhns_file(
+        code: str,
+        title: str,
+        rows_src: List[Dict[str, Any]],
+        tms: Tuple[str, ...],
+        ps_gds: Tuple[str, ...],
+        decl_lookup: Dict[Tuple[Tuple[int, int, int, str], str], float],
+        extra_pp_rows: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[str]:
+        tax_rows = [r for r in rows_src if r["tm"] in tms and r["gd"] != "BT"]
+        pp_rows = [r for r in (extra_pp_rows or []) if r["tm"] in tms and r["gd"] == "PP"]
+        if not tax_rows and not pp_rows and not decl_lookup:
+            return None
+
+        c2_vals = [x["so_tien"] for x in rows_src if x["gd"] == "C2" and x["so_tien"] != 0]
+        c2_neg = bool(c2_vals and sum(1 for v in c2_vals if v < 0) >= len(c2_vals) / 2)
+
+        def _s_ps(it: Dict[str, Any]) -> float:
+            v = it["so_tien"]
+            nc = it.get("no_co", "")
+            if nc in ("C", "N") and not c2_neg and v >= 0:
+                return v if nc == "N" else -v
+            return v
+
+        def _s_pay(it: Dict[str, Any]) -> float:
+            v = it["so_tien"]
+            nc = it.get("no_co", "")
+            if nc in ("C", "N") and not c2_neg and v >= 0:
+                return v if nc == "C" else -v
+            return -v if c2_neg else v
+
+        opening_bal = 0.0
+        tq_ps_by_key: Dict[Tuple[Tuple[int, int, int, str], str], float] = defaultdict(float)
+        tq_nop_by_key: Dict[Tuple[Tuple[int, int, int, str], str], float] = defaultdict(float)
+
+        for it in tax_rows:
+            pk = normalize_period_key(it["ky"], it["ngay_ht"])
+            ky_y = pk[0]
+            ht_y = it["ht_year"]
+            if ky_y < start_year:
+                if it["gd"] in payment_gds:
+                    if ht_y < start_year:
+                        opening_bal -= _s_pay(it)
+                    elif start_year <= ht_y <= end_year:
+                        # Khoản nộp trong kỳ kiểm tra cho kỳ trước -> tính vào cột đã nộp theo kỳ gốc
+                        tq_nop_by_key[(pk, it["tm"])] += _s_pay(it)
+                else:
+                    opening_bal += _s_ps(it)
+            elif start_year <= ky_y <= end_year:
+                if it["gd"] in ps_gds:
+                    tq_ps_by_key[(pk, it["tm"])] += _s_ps(it)
+                elif it["gd"] in payment_gds:
+                    tq_nop_by_key[(pk, it["tm"])] += _s_pay(it)
+                else:
+                    tq_ps_by_key[(pk, it["tm"])] += _s_ps(it)
+
+        for it in pp_rows:
+            pk = normalize_period_key(it["ky"], it["ngay_ht"])
+            if start_year <= pk[0] <= end_year:
+                tq_ps_by_key[(pk, it["tm"])] += _s_ps(it)
+
+        all_keys = sorted(
+            set(decl_lookup.keys()) | set(tq_ps_by_key.keys()) | set(tq_nop_by_key.keys()),
+            key=lambda x: (x[0], x[1]),
+        )
+
+        wb_out = openpyxl.Workbook()
+        ws = wb_out.active
+        ws.title = "QHNS_TheoKy"
+
+        thin = Side(style="thin", color="000000")
+        b_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+        f_title = Font(name="Times New Roman", size=12, bold=True, color="1F4E78")
+        f_hdr = Font(name="Times New Roman", size=10, bold=True, color="FFFFFF")
+        f_reg = Font(name="Times New Roman", size=10)
+        f_bold = Font(name="Times New Roman", size=10, bold=True)
+        fill_hdr = PatternFill("solid", fgColor="1F4E78")
+        fill_sub = PatternFill("solid", fgColor="D9E1F2")
+        fill_open = PatternFill("solid", fgColor="F2F2F2")
+        al_c = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        al_l = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        al_r = Alignment(horizontal="right", vertical="center")
+        num_fmt = "#,##0"
+
+        cqt_txt = f" - CQT quản lý: {norm_cqt}" if norm_cqt else ""
+        ws["A1"] = f"ĐỐI CHIẾU QUAN HỆ NGÂN SÁCH THEO KỲ KÊ KHAI - {title} ({start_year}–{end_year}{cqt_txt})"
+        ws["A1"].font = f_title
+        ws.merge_cells("A1:K1")
+        ws.row_dimensions[1].height = 24
+
+        headers = [
+            "STT",
+            "Kỳ kê khai",
+            "Năm",
+            "Tiểu mục",
+            "Thuế phải nộp\ntheo Tờ khai",
+            "Phát sinh trên\nSổ Tổng Quan",
+            "Chênh lệch\n(Tờ khai - TQ)",
+            "Số đã nộp theo kỳ\ntrên Sổ TQ",
+            "Còn phải nộp\ntheo kỳ (TQ)",
+            "Dư lũy kế\nđến kỳ (TQ)",
+            "Trạng thái đối chiếu",
+        ]
+        for ci, h in enumerate(headers, start=1):
+            c = ws.cell(2, ci, h)
+            c.font = f_hdr
+            c.fill = fill_hdr
+            c.alignment = al_c
+            c.border = b_all
+        ws.row_dimensions[2].height = 30
+
+        # Dòng 3: Số dư đầu kỳ trước start_year
+        ws.cell(3, 2, f"Số dư đầu kỳ trước {start_year}").alignment = al_l
+        ws.cell(3, 10, round(opening_bal))
+        for ci in range(1, 12):
+            c = ws.cell(3, ci)
+            c.font = f_bold
+            c.fill = fill_open
+            c.border = b_all
+            if ci in (5, 6, 7, 8, 9, 10):
+                c.number_format = num_fmt
+                c.alignment = al_r
+
+        cur_r = 4
+        for idx, (pk, tm) in enumerate(all_keys, start=1):
+            decl_v = round(decl_lookup.get((pk, tm), 0.0))
+            ps_v = round(tq_ps_by_key.get((pk, tm), 0.0))
+            nop_v = round(tq_nop_by_key.get((pk, tm), 0.0))
+            row_vals = [
+                idx,
+                pk[3],
+                pk[0],
+                tm,
+                decl_v,
+                ps_v,
+                f"=E{cur_r}-F{cur_r}",
+                nop_v,
+                f"=F{cur_r}-H{cur_r}",
+                f"=J{cur_r - 1}+F{cur_r}-H{cur_r}",
+                f'=IF(ABS(G{cur_r})>1000,"Lệch / Thiếu TK trên TQ",IF(I{cur_r}>1000,"Khớp TK - Còn nợ",IF(I{cur_r}<-1000,"Khớp TK - Nộp thừa","Khớp 100%")))',
+            ]
+            for ci, v in enumerate(row_vals, start=1):
+                c = ws.cell(cur_r, ci, v)
+                c.font = f_bold if ci in (7, 9, 10) else f_reg
+                c.border = b_all
+                if ci in (1, 2, 3, 4):
+                    c.alignment = al_c
+                    if ci == 4:
+                        c.number_format = "@"
+                elif ci == 11:
+                    c.alignment = al_l
+                else:
+                    c.number_format = num_fmt
+                    c.alignment = al_r
+            cur_r += 1
+
+        # Dòng TỔNG CỘNG
+        if all_keys:
+            r_end = cur_r - 1
+            ws.cell(cur_r, 2, "TỔNG CỘNG").alignment = al_c
+            for ci, col_l in ((5, "E"), (6, "F"), (7, "G"), (8, "H"), (9, "I")):
+                ws.cell(cur_r, ci, f"=SUM({col_l}4:{col_l}{r_end})")
+            ws.cell(cur_r, 10, f"=J{r_end}")
+            for ci in range(1, 12):
+                c = ws.cell(cur_r, ci)
+                c.font = f_bold
+                c.fill = fill_sub
+                c.border = b_all
+                if 5 <= ci <= 10:
+                    c.number_format = num_fmt
+                    c.alignment = al_r
+
+        widths = {1: 6, 2: 14, 3: 8, 4: 11, 5: 18, 6: 18, 7: 18, 8: 18, 9: 18, 10: 18, 11: 24}
+        for ci, w in widths.items():
+            ws.column_dimensions[get_column_letter(ci)].width = w
+        ws.freeze_panes = "A4"
+
+        # Sheet 2: Chi tiết giao dịch gốc trên Sổ TQ cho đúng sắc thuế này
+        ws_raw = wb_out.create_sheet("ChiTiet_TQ")
+        raw_hdrs = ["STT", "Dòng TQ", "Mã CQT", "Kỳ báo cáo", "Ký hiệu GD", "Tiểu mục", "Số tiền", "Ngày hạch toán", "Ghi chú"]
+        for ci, h in enumerate(raw_hdrs, start=1):
+            c = ws_raw.cell(1, ci, h)
+            c.font = f_hdr
+            c.fill = fill_hdr
+            c.alignment = al_c
+            c.border = b_all
+        ws_raw.row_dimensions[1].height = 24
+        combined_raw = [(it, "") for it in tax_rows] + [(it, "PP phân bổ CQT khác") for it in pp_rows]
+        for idx, (it, note) in enumerate(combined_raw, start=1):
+            rr = idx + 1
+            vals = [idx, it["row"], it["cqt"], it["ky"], it["gd"], it["tm"], round(it["so_tien"]), it["ngay_ht"], note]
+            for ci, v in enumerate(vals, start=1):
+                c = ws_raw.cell(rr, ci, v)
+                c.font = f_reg
+                c.border = b_all
+                if ci in (3, 4, 6):
+                    c.number_format = "@"
+                    c.alignment = al_c
+                elif ci == 7:
+                    c.number_format = num_fmt
+                    c.alignment = al_r
+                elif ci == 8:
+                    c.number_format = "dd/mm/yyyy"
+                    c.alignment = al_c
+                elif ci in (1, 2, 5):
+                    c.alignment = al_c
+                else:
+                    c.alignment = al_l
+        for ci, w in {1: 6, 2: 9, 3: 10, 4: 12, 5: 12, 6: 11, 7: 18, 8: 14, 9: 24}.items():
+            ws_raw.column_dimensions[get_column_letter(ci)].width = w
+        ws_raw.freeze_panes = "A2"
+
+        out_file = os.path.join(out_dir, f"{base_prefix}_{code}.xlsx")
+        wb_out.save(out_file)
+        return out_file
+
+    created_files: List[str] = []
+    if main_tq:
+        f_gtgt = _build_single_tax_qhns_file(
+            "GTGT",
+            "THUẾ GTGT (TM 1701)",
+            main_tq,
+            ("1701",),
+            ("TK",),
+            {(pk, "1701"): v for pk, v in decl_gtgt_by_pk.items()},
+        )
+        if f_gtgt:
+            created_files.append(f_gtgt)
+
+        f_tndn = _build_single_tax_qhns_file(
+            "TNDN",
+            "THUẾ TNDN (TM 1052)",
+            main_tq,
+            ("1052",),
+            ("TK", "TQ", "QT"),
+            {((y, 3, 0, f"Năm {y}"), "1052"): v for y, v in decl_tndn_by_yr.items()},
+        )
+        if f_tndn:
+            created_files.append(f_tndn)
+
+        f_tncn = _build_single_tax_qhns_file(
+            "TNCN",
+            "THUẾ TNCN (TM 1001)",
+            main_tq,
+            ("1001",),
+            ("TK", "TH", "TQ", "PP"),
+            {((y, 3, 0, f"Năm {y}"), "1001"): v for y, v in decl_tncn_by_yr.items()},
+            extra_pp_rows=other_tq,
+        )
+        if f_tncn:
+            created_files.append(f_tncn)
+
+        f_lpmb = _build_single_tax_qhns_file(
+            "LPMB",
+            "LỆ PHÍ MÔN BÀI (TM 2862/2863/2864)",
+            main_tq,
+            lpmb_tms,
+            ("TK", "TQ", "QT"),
+            {},
+        )
+        if f_lpmb:
+            created_files.append(f_lpmb)
+
+    if main_ntnn:
+        f_ntnn = _build_single_tax_qhns_file(
+            "NTNN",
+            "THUẾ NHÀ THẦU NƯỚC NGOÀI (TM 1701 & 1052)",
+            main_ntnn,
+            ("1701", "1052"),
+            ("TK", "TQ", "QT"),
+            dict(decl_ntnn_by_pk_tm),
+        )
+        if f_ntnn:
+            created_files.append(f_ntnn)
+
+    return created_files

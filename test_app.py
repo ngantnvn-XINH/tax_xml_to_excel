@@ -1413,6 +1413,96 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_dc_n["D4"].value, "1701")
             self.assertEqual(ws_dc_n["F4"].value, 5_263_158)
 
+    def test_v16_export_qhns_separate_files_per_tax_type(self) -> None:
+        """Kiểm thử v1.6: Xuất riêng phần QHNS (đối chiếu theo kỳ kê khai) ra từng file Excel độc lập cho mỗi sắc thuế (QHNS_GTGT, QHNS_TNDN, QHNS_TNCN, QHNS_NTNN)."""
+        import datetime
+        from excel_exporter import export_to_excel
+        from qhns_summarizer import export_qhns_by_tax_type_period_files
+        from tax_parser import TaxDeclaration
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d_gtgt = TaxDeclaration(
+                file_path="g1.xml",
+                file_name="g1.xml",
+                tax_type="GTGT",
+                ma_tkhai="01/GTGT",
+                ten_tkhai="Tờ khai thuế GTGT",
+                mst="0100000088",
+                ten_nnt="Cong ty Mau C",
+                ky_kkhai="01/2024",
+                tu_ngay=datetime.date(2024, 1, 1),
+                den_ngay=datetime.date(2024, 1, 31),
+                ngay_lap=datetime.date(2024, 2, 18),
+                so_lan="0",
+                indicators={"ct40": 15_000_000, "ct40a": 15_000_000},
+            )
+            d_ntnn = TaxDeclaration(
+                file_path="n1.xml",
+                file_name="n1.xml",
+                tax_type="NTNN",
+                ma_tkhai="01/NTNN",
+                ten_tkhai="Tờ khai thuế nhà thầu nước ngoài",
+                mst="0100000099",
+                ten_nnt="Cong ty Mau C (NTNN)",
+                ky_kkhai="06/2024",
+                tu_ngay=datetime.date(2024, 6, 1),
+                den_ngay=datetime.date(2024, 6, 30),
+                ngay_lap=datetime.date(2024, 7, 10),
+                so_lan="0",
+                indicators={
+                    "_ntnn_dt_gtgt": 105_263_158,
+                    "_ntnn_thue_gtgt": 5_263_158,
+                    "_ntnn_dt_tndn": 100_000_000,
+                    "_ntnn_thue_tndn": 5_000_000,
+                    "_ntnn_tong_thue": 10_263_158,
+                    "_ntnn_schema": "TT80",
+                },
+            )
+            consolidated = os.path.join(tmpdir, "TongHop.xlsx")
+            export_to_excel([d_gtgt, d_ntnn], consolidated)
+
+            wb_tq = openpyxl.Workbook()
+            ws_tq = wb_tq.active
+            ws_tq.title = "TQ"
+            ws_tq.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_tq.append(["7901", "2401", "1", "TK", "1701", "VND", 15_000_000, datetime.datetime(2024, 2, 18)])
+            ws_tq.append(["7901", "2401", "2", "C2", "1701", "VND", -10_000_000, datetime.datetime(2024, 2, 20)])
+            ws_tq.append(["7901", "24CN", "3", "TK", "1001", "VND", 8_000_000, datetime.datetime(2024, 12, 20)])
+            ws_tq.append(["0101", "24CN", "4", "PP", "1001", "VND", 2_000_000, datetime.datetime(2024, 12, 20)])
+            tq_path = os.path.join(tmpdir, "tq.xlsx")
+            wb_tq.save(tq_path)
+
+            wb_nt = openpyxl.Workbook()
+            ws_nt = wb_nt.active
+            ws_nt.title = "TQ"
+            ws_nt.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_nt.append(["7901", "2406", "1", "TK", "1701", "VND", 5_263_158, datetime.datetime(2024, 7, 10)])
+            ws_nt.append(["7901", "2406", "2", "C2", "1701", "VND", -5_263_158, datetime.datetime(2024, 7, 12)])
+            nt_path = os.path.join(tmpdir, "tq_ntnn.xlsx")
+            wb_nt.save(nt_path)
+
+            out_dir = os.path.join(tmpdir, "qhns_split")
+            files = export_qhns_by_tax_type_period_files(
+                consolidated, out_dir, tq_excel_path=tq_path, tq_ntnn_excel_path=nt_path, year_from=2024, year_to=2024, target_cqt="7901"
+            )
+            names = {os.path.basename(p) for p in files}
+            self.assertIn("QHNS_GTGT.xlsx", names)
+            self.assertIn("QHNS_TNCN.xlsx", names)
+            self.assertIn("QHNS_NTNN.xlsx", names)
+
+            wb_g = openpyxl.load_workbook(os.path.join(out_dir, "QHNS_GTGT.xlsx"), data_only=False)
+            self.assertEqual(wb_g.sheetnames, ["QHNS_TheoKy", "ChiTiet_TQ"])
+            ws_g = wb_g["QHNS_TheoKy"]
+            self.assertEqual(ws_g["B4"].value, "01/2024")
+            self.assertEqual(ws_g["E4"].value, 15_000_000)
+            self.assertEqual(ws_g["F4"].value, 15_000_000)
+            self.assertEqual(ws_g["H4"].value, 10_000_000)
+
+            # Kiểm tra QHNS_TNCN đã cộng cả 2tr PP phân bổ ở CQT 0101 vào cột Phát sinh TQ (8tr + 2tr = 10tr)
+            wb_tn = openpyxl.load_workbook(os.path.join(out_dir, "QHNS_TNCN.xlsx"), data_only=False)
+            ws_tn = wb_tn["QHNS_TheoKy"]
+            self.assertEqual(ws_tn["F4"].value, 10_000_000)
+
 
 if __name__ == "__main__":
     unittest.main()
