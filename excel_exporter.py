@@ -2631,6 +2631,7 @@ def write_yearly_verification_sheets(
     kqkd_sheet_name: str = "BCHDKD",
     kktndn_sheet_name: str = "KKTNDN",
     tncn_sheet_name: str = "TNCN",
+    ntnn_sheet_name: str = "So Thue NTNN Cuoi",
 ) -> List[str]:
     """
     Tạo các sheet kiểm tra thuế theo từng năm (mỗi năm 1 sheet: '2019', '2020', ..., '2025', ...)
@@ -2639,12 +2640,13 @@ def write_yearly_verification_sheets(
     - Bảng 2 (Dòng 27..79): Thuế TNDN (liên kết công thức tới sheet 'BCHDKD' và 'KKTNDN', tự động
       nhận diện tọa độ dòng của cả mẫu TT156 và TT80)
     - Bảng 3 (Dòng 81..90): Thuế TNCN (liên kết công thức tới bảng tổng hợp 05-1/05-2 tại dòng 41..46 sheet 'TNCN')
-    - Bảng 4 (Dòng 93..98): Thuế Nhà thầu
+    - Bảng 4 (Dòng 93..98): Thuế Nhà thầu (liên kết công thức trực tiếp tới sheet 'So Thue NTNN Cuoi')
     """
     actual_gtgt_sheet = None
     actual_kqkd_sheet = None
     actual_kktndn_sheet = None
     actual_tncn_sheet = None
+    actual_ntnn_sheet = None
 
     for s in wb.sheetnames:
         sl = s.strip().lower()
@@ -2657,6 +2659,8 @@ def write_yearly_verification_sheets(
         elif sl == tncn_sheet_name.strip().lower() or sl == "tk":
             if actual_tncn_sheet is None or sl == tncn_sheet_name.strip().lower():
                 actual_tncn_sheet = s
+        elif sl == ntnn_sheet_name.strip().lower() or "so thue ntnn cuoi" in sl:
+            actual_ntnn_sheet = s
 
     # 1. Dò tọa độ dòng (r_first, r_last, r_sum) của từng năm trên sheet 'So Thue GTGT Cuoi'
     gtgt_coords: Dict[int, Tuple[int, int, int]] = {}
@@ -2730,11 +2734,23 @@ def write_yearly_verification_sheets(
                 if m:
                     tncn_coords[int(m.group(0))] = get_column_letter(c)
 
+    # 5. Dò tọa độ dòng Tổng cộng năm trên sheet 'So Thue NTNN Cuoi'
+    ntnn_coords: Dict[int, int] = {}
+    if actual_ntnn_sheet and actual_ntnn_sheet in wb.sheetnames:
+        ws_nt = wb[actual_ntnn_sheet]
+        for r in range(2, ws_nt.max_row + 1):
+            val_f = str(ws_nt.cell(r, 6).value or "")
+            if "Tổng cộng năm" in val_f:
+                m = re.search(r"\b(19\d\d|20\d\d)\b", val_f)
+                if m:
+                    ntnn_coords[int(m.group(0))] = r
+
     all_years = sorted(
         set(gtgt_coords.keys())
         | set(kqkd_coords.keys())
         | set(kktndn_coords.keys())
         | set(tncn_coords.keys())
+        | set(ntnn_coords.keys())
     )
     if not all_years:
         return []
@@ -2912,10 +2928,28 @@ def write_yearly_verification_sheets(
             # BẢNG 4: THUẾ NHÀ THẦU (Dòng 93..98)
             93: ("STT", "Chỉ tiêu", "Số báo cáo của người nộp thuế", "số kiểm tra", "Chênh lệch"),
             94: (-1, -2, -3, -4, "(5)=(4)-(3)"),
-            95: (1, "Doanh thu tính thuế của nhà thầu nước ngoài ", 0, "=C95", "=D95-C95"),
+            95: (
+                1,
+                "Doanh thu tính thuế của nhà thầu nước ngoài ",
+                f"='{actual_ntnn_sheet}'!Q{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
+                "=C95",
+                "=D95-C95",
+            ),
             96: (2, "Thuế nhà thầu phải khấu trừ  ", "=C97+C98", "=D97+D98", "=E97+E98"),
-            97: ("a", "Thuế GTGT", 0, "=C97", "=D97-C97"),
-            98: ("b", "Thuế TNDN ", 0, "=C98", "=D98-C98"),
+            97: (
+                "a",
+                "Thuế GTGT",
+                f"='{actual_ntnn_sheet}'!N{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
+                "=C97",
+                "=D97-C97",
+            ),
+            98: (
+                "b",
+                "Thuế TNDN ",
+                f"='{actual_ntnn_sheet}'!P{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
+                "=C98",
+                "=D98-C98",
+            ),
         }
 
         for r_idx in range(1, 99):
@@ -3211,9 +3245,13 @@ def write_summary_sheet(
             status = f"Lỗi: {d.error}"
         else:
             ky_str = (
-                d.tu_ngay.strftime("%y%m")
-                if (d.tax_type == "GTGT" and d.tu_ngay)
-                else str(d.year or d.ky_kkhai or "")
+                d.tu_ngay.strftime("%y%m%d")
+                if (d.tax_type == "NTNN" and d.tu_ngay)
+                else (
+                    d.tu_ngay.strftime("%y%m")
+                    if (d.tax_type == "GTGT" and d.tu_ngay)
+                    else str(d.year or d.ky_kkhai or "")
+                )
             )
             lan_str = str(d.so_lan or "0").strip()
             dedup_k = (d.tax_type or "", d.mst or "", ky_str, lan_str)
@@ -3589,6 +3627,12 @@ def _populate_workbook_sheets(
                 fiscal_ranges=fiscal_ranges,
             )
 
+    ntnn_items = [d for d in valid_decls if d.tax_type == "NTNN"]
+    if ntnn_items:
+        from ntnn_exporter import write_ntnn_cuoi_sheet, write_ntnn_timeline_sheet
+        write_ntnn_timeline_sheet(wb, ntnn_items, existing_sheets, sheet_name="So Thue NTNN TH")
+        write_ntnn_cuoi_sheet(wb, ntnn_items, existing_sheets, sheet_name="So Thue NTNN Cuoi")
+
     if gtgt_items or tndn_items:
         write_sheet_chenh_lech_gtgt_tndn(
             wb,
@@ -3597,7 +3641,7 @@ def _populate_workbook_sheets(
             fiscal_ranges=fiscal_ranges or None,
         )
 
-    if gtgt_items or tndn_items or tncn_items:
+    if gtgt_items or tndn_items or tncn_items or ntnn_items:
         write_yearly_verification_sheets(wb, existing_sheets)
         from penalty_calculator import add_late_payment_sheet
         from report_builder import add_audit_report_sheet
@@ -3673,8 +3717,15 @@ def export_to_excel(
                     write_gtgt_timeline_sheet(yr_wb, gtgt_items, existing, sheet_name="So Thue GTGT TH")
                     write_gtgt_cuoi_sheet(yr_wb, gtgt_items, existing, sheet_name="So Thue GTGT Cuoi")
 
+                ntnn_items = [d for d in other_decls if d.tax_type == "NTNN"]
+                if ntnn_items:
+                    from ntnn_exporter import write_ntnn_cuoi_sheet, write_ntnn_timeline_sheet
+                    write_ntnn_timeline_sheet(yr_wb, ntnn_items, existing, sheet_name="So Thue NTNN TH")
+                    write_ntnn_cuoi_sheet(yr_wb, ntnn_items, existing, sheet_name="So Thue NTNN Cuoi")
+
                 if gtgt_items or tndn_items:
                     write_sheet_chenh_lech_gtgt_tndn(yr_wb, existing)
+                if gtgt_items or tndn_items or ntnn_items:
                     write_yearly_verification_sheets(yr_wb, existing)
 
                 khac_items = [d for d in other_decls if d.tax_type == "Khác"]

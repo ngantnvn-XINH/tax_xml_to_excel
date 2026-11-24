@@ -504,7 +504,10 @@ def _eval_year_sheet_values(excel_path: str, years: List[int]) -> Dict[int, Dict
     """
     wb_v = openpyxl.load_workbook(excel_path, data_only=True)
     wb_f = openpyxl.load_workbook(excel_path, data_only=False)
-    result: Dict[int, Dict[str, float]] = {y: {"gtgt_c23": 0.0, "tncn_c90": 0.0, "tndn_c76": 0.0} for y in years}
+    result: Dict[int, Dict[str, float]] = {
+        y: {"gtgt_c23": 0.0, "tncn_c90": 0.0, "tndn_c76": 0.0, "ntnn_c97": 0.0, "ntnn_c98": 0.0}
+        for y in years
+    }
 
     for y in years:
         sname = str(y)
@@ -513,6 +516,8 @@ def _eval_year_sheet_values(excel_path: str, years: List[int]) -> Dict[int, Dict
         result[y]["gtgt_c23"] = _eval_simple_formula(wb_f, wb_v, sname, "C23")
         result[y]["tncn_c90"] = _eval_simple_formula(wb_f, wb_v, sname, "C90")
         result[y]["tndn_c76"] = _eval_simple_formula(wb_f, wb_v, sname, "C76")
+        result[y]["ntnn_c97"] = _eval_simple_formula(wb_f, wb_v, sname, "C97")
+        result[y]["ntnn_c98"] = _eval_simple_formula(wb_f, wb_v, sname, "C98")
 
     return result
 
@@ -598,6 +603,8 @@ def integrate_tq_and_qhns_into_workbook(
     gtgt_missing_info: Dict[int, Optional[str]] = {}
     tndn_missing_info: Dict[int, Optional[str]] = {}
     tncn_missing_info: Dict[int, Optional[str]] = {}
+    ntg_missing_info: Dict[int, Optional[str]] = {}
+    ntt_missing_info: Dict[int, Optional[str]] = {}
 
     for y in years:
         sname = str(y)
@@ -605,6 +612,8 @@ def integrate_tq_and_qhns_into_workbook(
             gtgt_missing_info[y] = None
             tndn_missing_info[y] = None
             tncn_missing_info[y] = None
+            ntg_missing_info[y] = None
+            ntt_missing_info[y] = None
             continue
         ws_y = wb[sname]
 
@@ -684,22 +693,53 @@ def integrate_tq_and_qhns_into_workbook(
         # --- Dòng 97 & 98: Đối chiếu Thuế Nhà thầu (GTGT 1701 & TNDN 1052) trên TQ_NTNN nếu có ---
         if ntnn_metrics is not None:
             f97_val = round(ntnn_metrics["gtgt_tk_by_ky"][y])
-            f98_val = round(ntnn_metrics["tndn_tk_qt_by_ky"][y])
+            c97_val = round(decl_vals[y]["ntnn_c97"])
+            diff_ntg = c97_val - f97_val
             ws_y["F97"].value = f97_val
             ws_y["F97"].number_format = num_fmt
             ws_y["F97"].font = font_bold
-            ws_y["F97"].comment = Comment("Phát sinh Thuế GTGT Nhà thầu (TM 1701) trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)", "QHNS")
             ws_y["G97"].value = "=C97-F97"
             ws_y["G97"].number_format = num_fmt
             ws_y["G97"].font = font_bold
+            if diff_ntg > 1000:
+                ws_y["F97"].comment = Comment(
+                    f"Phát sinh Thuế GTGT Nhà thầu (TM 1701) trên TQ_NTNN rà soát chênh lệch thiếu {diff_ntg:,.0f} so với tờ khai",
+                    "QHNS",
+                )
+                ntg_missing_info[y] = f"NTNN GTGT {y}"
+                alerts.append(
+                    f"Năm {y} - Thuế GTGT Nhà thầu: Tờ khai ({c97_val:,.0f}) > Tổng quan NTNN ({f97_val:,.0f}), "
+                    f"chênh lệch {diff_ntg:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra."
+                )
+            else:
+                ws_y["F97"].comment = Comment("Phát sinh Thuế GTGT Nhà thầu (TM 1701) trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)", "QHNS")
+                ntg_missing_info[y] = None
 
+            f98_val = round(ntnn_metrics["tndn_tk_qt_by_ky"][y])
+            c98_val = round(decl_vals[y]["ntnn_c98"])
+            diff_ntt = c98_val - f98_val
             ws_y["F98"].value = f98_val
             ws_y["F98"].number_format = num_fmt
             ws_y["F98"].font = font_bold
-            ws_y["F98"].comment = Comment("Phát sinh Thuế TNDN Nhà thầu (TM 1052) trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)", "QHNS")
             ws_y["G98"].value = "=C98-F98"
             ws_y["G98"].number_format = num_fmt
             ws_y["G98"].font = font_bold
+            if diff_ntt > 1000:
+                ws_y["F98"].comment = Comment(
+                    f"Phát sinh Thuế TNDN Nhà thầu (TM 1052) trên TQ_NTNN rà soát chênh lệch thiếu {diff_ntt:,.0f} so với tờ khai",
+                    "QHNS",
+                )
+                ntt_missing_info[y] = f"NTNN TNDN {y}"
+                alerts.append(
+                    f"Năm {y} - Thuế TNDN Nhà thầu: Tờ khai ({c98_val:,.0f}) > Tổng quan NTNN ({f98_val:,.0f}), "
+                    f"chênh lệch {diff_ntt:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra."
+                )
+            else:
+                ws_y["F98"].comment = Comment("Phát sinh Thuế TNDN Nhà thầu (TM 1052) trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)", "QHNS")
+                ntt_missing_info[y] = None
+        else:
+            ntg_missing_info[y] = None
+            ntt_missing_info[y] = None
 
     # 5. Xây dựng sheet QHNS chuẩn 01 biểu duy nhất
     if "QHNS" in wb.sheetnames:
@@ -752,6 +792,8 @@ def integrate_tq_and_qhns_into_workbook(
     tncn_e_cells: List[str] = []
     gtgt_e_cells: List[str] = []
     tndn_e_cells: List[str] = []
+    ntg_e_cells: List[str] = []
+    ntt_e_cells: List[str] = []
     special_nop_notes = metrics.get("special_nop_notes", {})
     opening_bb: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0, "NT_1701": 0, "NT_1052": 0}
     rounding_diff: Dict[str, int] = {"1701": 0, "1052": 0, "1001": 0, "LPMB": 0, "NT_1701": 0, "NT_1052": 0}
@@ -979,15 +1021,50 @@ def integrate_tq_and_qhns_into_workbook(
             ntg_nop = round(ntnn_metrics["gtgt_c2_by_ht"][y])
             ntt_ps = round(ntnn_metrics["tndn_tk_qt_by_ky"][y])
             ntt_nop = round(ntnn_metrics["tndn_c2_by_ht"][y])
+            c97_val_y = round(decl_vals[y]["ntnn_c97"]) if has_sheet else 0
+            c98_val_y = round(decl_vals[y]["ntnn_c98"]) if has_sheet else 0
 
-            ws_q.cell(r_nt_g, 4, ntg_ps)
+            if has_sheet and ntg_missing_info.get(y):
+                ws_q.cell(r_nt_g, 4, f"='{sname}'!F97")
+                ws_q.cell(r_nt_g, 4).comment = Comment(
+                    "Số phát sinh Thuế GTGT Nhà thầu đã ghi nhận trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)",
+                    "QHNS",
+                )
+                ws_q.cell(r_nt_g, 5, f"='{sname}'!G97")
+                ws_q.cell(r_nt_g, 5).comment = Comment(
+                    "Số chênh lệch thực tế giữa tờ khai 01/NTNN và phát sinh trên TQ_NTNN",
+                    "QHNS",
+                )
+                ntg_e_cells.append(f"E{r_nt_g}")
+            elif has_sheet and c97_val_y > 0:
+                ws_q.cell(r_nt_g, 4, f"='{sname}'!C97")
+            else:
+                ws_q.cell(r_nt_g, 4, ntg_ps)
+
             ws_q.cell(r_nt_g, 6, ntg_nop)
             if ntnn_sp.get(("1701", y)):
                 ws_q.cell(r_nt_g, 6).comment = Comment(
                     "GD C2 + NT/HC/C5 trên TQ_NTNN (bao gồm: " + "; ".join(ntnn_sp[("1701", y)]) + ")",
                     "QHNS",
                 )
-            ws_q.cell(r_nt_t, 4, ntt_ps)
+
+            if has_sheet and ntt_missing_info.get(y):
+                ws_q.cell(r_nt_t, 4, f"='{sname}'!F98")
+                ws_q.cell(r_nt_t, 4).comment = Comment(
+                    "Số phát sinh Thuế TNDN Nhà thầu đã ghi nhận trên Sổ Tổng Quan Nhà thầu (TQ_NTNN)",
+                    "QHNS",
+                )
+                ws_q.cell(r_nt_t, 5, f"='{sname}'!G98")
+                ws_q.cell(r_nt_t, 5).comment = Comment(
+                    "Số chênh lệch thực tế giữa tờ khai 01/NTNN và phát sinh trên TQ_NTNN",
+                    "QHNS",
+                )
+                ntt_e_cells.append(f"E{r_nt_t}")
+            elif has_sheet and c98_val_y > 0:
+                ws_q.cell(r_nt_t, 4, f"='{sname}'!C98")
+            else:
+                ws_q.cell(r_nt_t, 4, ntt_ps)
+
             ws_q.cell(r_nt_t, 6, ntt_nop)
             if ntnn_sp.get(("1052", y)):
                 ws_q.cell(r_nt_t, 6).comment = Comment(
@@ -1002,6 +1079,10 @@ def integrate_tq_and_qhns_into_workbook(
                 ws_q.cell(r_nt, 3, f"=G{prev_rows['nt_tong']}")
                 ws_q.cell(r_nt_g, 3, f"=G{prev_rows['nt_gtgt']}")
                 ws_q.cell(r_nt_t, 3, f"=G{prev_rows['nt_tndn']}")
+            if has_sheet and (round(decl_vals[y]["ntnn_c97"]) > 0 or round(decl_vals[y]["ntnn_c98"]) > 0):
+                ws_q.cell(r_nt_g, 4, f"='{sname}'!C97")
+                ws_q.cell(r_nt_t, 4, f"='{sname}'!C98")
+                ws_q.cell(r_nt, 4, f"=D{r_nt_g}+D{r_nt_t}")
         ws_q.cell(r_nt, 7, f"=G{r_nt_g}+G{r_nt_t}")
         ws_q.cell(r_nt_g, 7, f"=C{r_nt_g}+D{r_nt_g}+E{r_nt_g}-F{r_nt_g}")
         ws_q.cell(r_nt_t, 7, f"=C{r_nt_t}+D{r_nt_t}+E{r_nt_t}-F{r_nt_t}")
@@ -1064,6 +1145,17 @@ def integrate_tq_and_qhns_into_workbook(
                     c90_eff = f90_eff
                 rounding_diff["1001"] += c90_eff - f90_eff
                 rounding_diff_refs["1001"].append(f"'{sname}'!G90")
+            if ntnn_metrics is not None:
+                c97_eff = round(decl_vals[y]["ntnn_c97"])
+                f97_eff = round(ntnn_metrics["gtgt_tk_by_ky"][y])
+                if not ntg_missing_info.get(y) and c97_eff > 0:
+                    rounding_diff["NT_1701"] += c97_eff - f97_eff
+                    rounding_diff_refs["NT_1701"].append(f"'{sname}'!G97")
+                c98_eff = round(decl_vals[y]["ntnn_c98"])
+                f98_eff = round(ntnn_metrics["tndn_tk_qt_by_ky"][y])
+                if not ntt_missing_info.get(y) and c98_eff > 0:
+                    rounding_diff["NT_1052"] += c98_eff - f98_eff
+                    rounding_diff_refs["NT_1052"].append(f"'{sname}'!G98")
 
         # Nếu là năm cuối cùng và có khoản xử lý qua thanh tra (Cột E), đặt công thức đối chiếu ngược tại cột H
         if y_idx == len(years) - 1:
@@ -1090,6 +1182,22 @@ def integrate_tq_and_qhns_into_workbook(
                 ws_q.cell(r_td, 8).font = font_bold
                 ws_q.cell(r_td, 8).comment = Comment(
                     "Đối chiếu số dư cuối kỳ (chưa cộng số xử lý qua thanh tra Cột 5; xem đối chiếu khớp thực tế 100% tại sheet DoiChieu_QHNS)",
+                    "QHNS",
+                )
+            if ntg_e_cells:
+                expr = "-".join(ntg_e_cells)
+                ws_q.cell(r_nt_g, 8, f"=G{r_nt_g}-{expr}").number_format = num_fmt
+                ws_q.cell(r_nt_g, 8).font = font_bold
+                ws_q.cell(r_nt_g, 8).comment = Comment(
+                    "Đối chiếu số dư cuối kỳ GTGT NTNN (chưa cộng số xử lý qua thanh tra Cột 5; xem đối chiếu khớp thực tế 100% tại sheet DoiChieu_QHNS)",
+                    "QHNS",
+                )
+            if ntt_e_cells:
+                expr = "-".join(ntt_e_cells)
+                ws_q.cell(r_nt_t, 8, f"=G{r_nt_t}-{expr}").number_format = num_fmt
+                ws_q.cell(r_nt_t, 8).font = font_bold
+                ws_q.cell(r_nt_t, 8).comment = Comment(
+                    "Đối chiếu số dư cuối kỳ TNDN NTNN (chưa cộng số xử lý qua thanh tra Cột 5; xem đối chiếu khớp thực tế 100% tại sheet DoiChieu_QHNS)",
                     "QHNS",
                 )
 
@@ -1258,10 +1366,10 @@ def integrate_tq_and_qhns_into_workbook(
     ]
     if ntnn_metrics is not None:
         dc_specs.append(
-            ("Thuế GTGT Nhà thầu (TQ_NTNN)", "NT_1701", "1701 (NTNN)", last_rows.get("nt_gtgt"), [], ntnn_metrics["gtgt_tk_by_ky"], ntnn_metrics["gtgt_c2_by_ht"], ntnn_metrics["opening_exact"]["1701"], True)
+            ("Thuế GTGT Nhà thầu (TQ_NTNN)", "NT_1701", "1701 (NTNN)", last_rows.get("nt_gtgt"), ntg_e_cells, ntnn_metrics["gtgt_tk_by_ky"], ntnn_metrics["gtgt_c2_by_ht"], ntnn_metrics["opening_exact"]["1701"], True)
         )
         dc_specs.append(
-            ("Thuế TNDN Nhà thầu (TQ_NTNN)", "NT_1052", "1052 (NTNN)", last_rows.get("nt_tndn"), [], ntnn_metrics["tndn_tk_qt_by_ky"], ntnn_metrics["tndn_c2_by_ht"], ntnn_metrics["opening_exact"]["1052"], True)
+            ("Thuế TNDN Nhà thầu (TQ_NTNN)", "NT_1052", "1052 (NTNN)", last_rows.get("nt_tndn"), ntt_e_cells, ntnn_metrics["tndn_tk_qt_by_ky"], ntnn_metrics["tndn_c2_by_ht"], ntnn_metrics["opening_exact"]["1052"], True)
         )
     for o_tm in other_tms:
         o_name = TIEU_MUC_NAMES.get(o_tm, f"Tiểu mục {o_tm}")

@@ -18,15 +18,15 @@ from qhns_summarizer import integrate_tq_and_qhns_into_workbook
 from tax_parser import TaxDeclaration, parse_tax_xml
 
 
-APP_VERSION = "v1.5"
+APP_VERSION = "v1.6"
 
 
 class TaxXmlToExcelApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title(f"Chuyển đổi Tờ khai Thuế XML & Đối chiếu QHNS (GTGT, TNCN, TNDN, BCTC, TQ) - {APP_VERSION}")
-        self.root.geometry("1120x700")
-        self.root.minsize(980, 580)
+        self.root.title(f"Chuyển đổi Tờ khai Thuế XML & Đối chiếu QHNS (GTGT, TNCN, TNDN, BCTC, NTNN, TQ) - {APP_VERSION}")
+        self.root.geometry("1140x760")
+        self.root.minsize(980, 620)
 
         self.declarations: List[TaxDeclaration] = []
         self.file_paths_set: set[str] = set()
@@ -69,10 +69,28 @@ class TaxXmlToExcelApp:
         self.lbl_count = ttk.Label(btn_frame, text="Tổng: 0 file", font=("Segoe UI", 9, "bold"))
         self.lbl_count.pack(side=tk.RIGHT)
 
+        # Khung chọn riêng Tờ khai Thuế Nhà Thầu XML (MST nộp thay riêng biệt)
+        ntnn_xml_frame = ttk.LabelFrame(
+            self.root,
+            text="1b. Tờ khai Thuế Nhà Thầu XML (Chọn riêng - MST nộp thay riêng: tự động lên So Thue NTNN TH / Cuoi & link sang từng năm)",
+            padding=(10, 6),
+        )
+        ntnn_xml_frame.pack(fill=tk.X, padx=12, pady=4)
+
+        ttk.Button(ntnn_xml_frame, text="Chọn nhiều file XML Nhà thầu...", command=self.add_ntnn_files).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
+        ttk.Button(ntnn_xml_frame, text="Chọn thư mục XML Nhà thầu...", command=self.add_ntnn_folder).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
+        ttk.Button(ntnn_xml_frame, text="Xóa XML Nhà thầu", command=self.clear_ntnn_files).pack(side=tk.LEFT)
+        self.lbl_ntnn_count = ttk.Label(ntnn_xml_frame, text="Nhà thầu (NTNN): 0 file", font=("Segoe UI", 9, "bold"))
+        self.lbl_ntnn_count.pack(side=tk.RIGHT)
+
         # Khung chọn Sổ Tổng Quan (TQ) tùy chọn để đối chiếu & lên tự động biểu QHNS
         tq_frame = ttk.LabelFrame(
             self.root,
-            text="1b. Sổ Tổng Quan (TQ - Tùy chọn: nếu chọn sẽ tự động đối chiếu F/G trên từng năm & xuất biểu QHNS)",
+            text="1c. Sổ Tổng Quan (TQ - Tùy chọn: nếu chọn sẽ tự động đối chiếu F/G trên từng năm & xuất biểu QHNS)",
             padding=(10, 6),
         )
         tq_frame.pack(fill=tk.X, padx=12, pady=4)
@@ -87,7 +105,7 @@ class TaxXmlToExcelApp:
         # Khung chọn Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) tùy chọn để đối chiếu & lên tự động mục Thuế nhà thầu trên QHNS
         ntnn_frame = ttk.LabelFrame(
             self.root,
-            text="1c. Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN - Tùy chọn: nếu chọn sẽ tự động đối chiếu & lên mục Thuế nhà thầu trên QHNS)",
+            text="1d. Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN - Tùy chọn: nếu chọn sẽ tự động đối chiếu F97/F98 & lên mục Thuế nhà thầu trên QHNS)",
             padding=(10, 6),
         )
         ntnn_frame.pack(fill=tk.X, padx=12, pady=4)
@@ -111,6 +129,7 @@ class TaxXmlToExcelApp:
         self.var_tncn = tk.BooleanVar(value=True)
         self.var_tndn = tk.BooleanVar(value=True)
         self.var_bctc = tk.BooleanVar(value=True)
+        self.var_ntnn = tk.BooleanVar(value=True)
         self.var_other = tk.BooleanVar(value=True)
 
         ttk.Checkbutton(row_opt1, text="GTGT", variable=self.var_gtgt, command=self.refresh_table).pack(
@@ -125,8 +144,11 @@ class TaxXmlToExcelApp:
         ttk.Checkbutton(row_opt1, text="BCTC", variable=self.var_bctc, command=self.refresh_table).pack(
             side=tk.LEFT, padx=4
         )
-        ttk.Checkbutton(row_opt1, text="Khác (Nhà thầu...)", variable=self.var_other, command=self.refresh_table).pack(
-            side=tk.LEFT, padx=(4, 18)
+        ttk.Checkbutton(row_opt1, text="Nhà thầu (NTNN)", variable=self.var_ntnn, command=self.refresh_table).pack(
+            side=tk.LEFT, padx=4
+        )
+        ttk.Checkbutton(row_opt1, text="Khác (LPMB...)", variable=self.var_other, command=self.refresh_table).pack(
+            side=tk.LEFT, padx=(4, 14)
         )
 
         ttk.Separator(row_opt1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
@@ -337,6 +359,8 @@ class TaxXmlToExcelApp:
             allowed.add("TNDN")
         if self.var_bctc.get():
             allowed.add("BCTC")
+        if self.var_ntnn.get():
+            allowed.add("NTNN")
         if self.var_other.get():
             allowed.add("Khác")
         return allowed
@@ -363,7 +387,39 @@ class TaxXmlToExcelApp:
             return
         self._load_xml_files(xml_files)
 
-    def _load_xml_files(self, paths: List[str]) -> None:
+    def add_ntnn_files(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Chọn các file XML tờ khai Thuế Nhà Thầu (01/NTNN...)",
+            filetypes=[("XML files", "*.xml"), ("All files", "*.*")],
+        )
+        if paths:
+            self._load_xml_files(list(paths), force_ntnn=True)
+
+    def add_ntnn_folder(self) -> None:
+        folder = filedialog.askdirectory(title="Chọn thư mục chứa các file XML tờ khai Thuế Nhà Thầu")
+        if not folder:
+            return
+        xml_files: List[str] = []
+        for root_dir, _, files in os.walk(folder):
+            for f in files:
+                if f.lower().endswith(".xml"):
+                    xml_files.append(os.path.join(root_dir, f))
+        if not xml_files:
+            messagebox.showinfo("Thông báo", "Không tìm thấy file .xml nào trong thư mục Nhà thầu đã chọn.")
+            return
+        self._load_xml_files(xml_files, force_ntnn=True)
+
+    def clear_ntnn_files(self) -> None:
+        remaining: List[TaxDeclaration] = []
+        for d in self.declarations:
+            if d.tax_type == "NTNN":
+                self.file_paths_set.discard(d.file_path)
+            else:
+                remaining.append(d)
+        self.declarations = remaining
+        self.refresh_table()
+
+    def _load_xml_files(self, paths: List[str], force_ntnn: bool = False) -> None:
         new_paths = [os.path.normpath(p) for p in paths if os.path.normpath(p) not in self.file_paths_set]
         if not new_paths:
             return
@@ -376,7 +432,10 @@ class TaxXmlToExcelApp:
         def worker() -> None:
             parsed: List[TaxDeclaration] = []
             for idx, p in enumerate(new_paths, start=1):
-                parsed.append(parse_tax_xml(p))
+                d = parse_tax_xml(p)
+                if force_ntnn and d.error is None and d.tax_type != "NTNN":
+                    d.tax_type = "NTNN"
+                parsed.append(d)
                 if idx % 10 == 0 or idx == len(new_paths):
                     self.root.after(0, lambda v=idx: self.progress.configure(value=v))
 
@@ -396,6 +455,7 @@ class TaxXmlToExcelApp:
         allowed = self._allowed_types()
         shown = 0
         dup_count = 0
+        ntnn_total = sum(1 for d in self.declarations if d.error is None and d.tax_type == "NTNN")
         seen_keys: set[tuple[str, str, str, str]] = set()
         for idx, d in enumerate(self.declarations):
             if d.error is None and d.tax_type not in allowed:
@@ -408,9 +468,13 @@ class TaxXmlToExcelApp:
                 status = f"Lỗi: {d.error}"
             else:
                 ky_str = (
-                    d.tu_ngay.strftime("%y%m")
-                    if (d.tax_type == "GTGT" and d.tu_ngay)
-                    else str(d.year or d.ky_kkhai or "")
+                    d.tu_ngay.strftime("%y%m%d")
+                    if (d.tax_type == "NTNN" and d.tu_ngay)
+                    else (
+                        d.tu_ngay.strftime("%y%m")
+                        if (d.tax_type == "GTGT" and d.tu_ngay)
+                        else str(d.year or d.ky_kkhai or "")
+                    )
                 )
                 lan_str = str(d.so_lan or "0").strip()
                 dedup_k = (d.tax_type or "", d.mst or "", ky_str, lan_str)
@@ -428,6 +492,7 @@ class TaxXmlToExcelApp:
             )
         dup_note = f" (Trùng: {dup_count})" if dup_count > 0 else ""
         self.lbl_count.config(text=f"Hiển thị: {shown} / Tổng: {len(self.declarations)} file{dup_note}")
+        self.lbl_ntnn_count.config(text=f"Nhà thầu (NTNN): {ntnn_total} file")
 
     def remove_selected(self) -> None:
         sel = self.tree.selection()

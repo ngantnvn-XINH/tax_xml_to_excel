@@ -155,14 +155,14 @@ def normalize_mst(val: Optional[str]) -> str:
 
 
 def classify_tax_type(ma_tkhai: str, ten_tkhai: str) -> str:
-    """Phân loại tờ khai thành GTGT, TNCN, TNDN, BCTC hoặc Khác (ưu tiên tách riêng Nhà thầu NTNN trước GTGT/TNDN)."""
+    """Phân loại tờ khai thành GTGT, TNCN, TNDN, BCTC, NTNN hoặc Khác (ưu tiên tách riêng Nhà thầu NTNN trước GTGT/TNDN)."""
     combined = f"{ma_tkhai} {ten_tkhai}".upper()
     if (
         "NTNN" in combined
         or "NHÀ THẦU" in combined
         or "NHA THAU" in combined
     ):
-        return "Khác"
+        return "NTNN"
     if (
         "BCTC" in combined
         or "BÁO CÁO TÀI CHÍNH" in combined
@@ -913,6 +913,31 @@ def parse_tax_xml(file_path: str) -> TaxDeclaration:
                 indicators[f"{code}_socuoinam"] = v
                 if code not in indicators or (indicators[code] == 0 and not is_khong_lt):
                     indicators[code] = v
+
+    if tax_type == "NTNN":
+        from ntnn_exporter import extract_ntnn_totals_from_xml_root
+        ntnn_yr = None
+        if ky_kkhai:
+            m_yr = re.search(r"(19\d\d|20\d\d)", str(ky_kkhai))
+            if m_yr:
+                ntnn_yr = int(m_yr.group(1))
+        if ntnn_yr is None and tu_ngay:
+            ntnn_yr = tu_ngay.year
+        elif ntnn_yr is None and ngay_lap:
+            ntnn_yr = ngay_lap.year
+        ntnn_m = extract_ntnn_totals_from_xml_root(
+            root,
+            ma_tkhai=ma_tkhai,
+            mo_ta_bmau=mo_ta_bmau,
+            ten_tkhai=ten_tkhai,
+            year=ntnn_yr,
+        )
+        indicators["_ntnn_dt_gtgt"] = ntnn_m["dt_gtgt"]
+        indicators["_ntnn_thue_gtgt"] = ntnn_m["thue_gtgt"]
+        indicators["_ntnn_dt_tndn"] = ntnn_m["dt_tndn"]
+        indicators["_ntnn_thue_tndn"] = ntnn_m["thue_tndn"]
+        indicators["_ntnn_tong_thue"] = ntnn_m["tong_thue"]
+        indicators["_ntnn_schema"] = ntnn_m["schema"]
 
     return TaxDeclaration(
         file_path=file_path,

@@ -987,9 +987,9 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(wb_out["2024"]["F98"].value, 8_000_000)
             # Kiểm tra dòng Thuế nhà thầu trên QHNS (row 9=nt_tong, row 10=nt_gtgt, row 11=nt_tndn)
             ws_q = wb_out["QHNS"]
-            self.assertEqual(ws_q["D10"].value, 12_000_000)
+            self.assertEqual(ws_q["D10"].value, "='2024'!C97")
             self.assertEqual(ws_q["F10"].value, 12_000_000)
-            self.assertEqual(ws_q["D11"].value, 8_000_000)
+            self.assertEqual(ws_q["D11"].value, "='2024'!C98")
             self.assertEqual(ws_q["F11"].value, 6_000_000)
             # Kiểm tra trên DoiChieu_QHNS có đủ 2 dòng NTNN (1701 & 1052) với dư cuối thực tế 0 và 2,000,000
             ws_dc = wb_out["DoiChieu_QHNS"]
@@ -997,11 +997,185 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(dc_map.get("1701 (NTNN)"), 0)
             self.assertEqual(dc_map.get("1052 (NTNN)"), 2_000_000)
 
-            # Kiểm tra phân loại tờ khai Nhà thầu (NTNN) tuyệt đối không bị trộn nhầm sang GTGT hay TNDN
+            # Kiểm tra phân loại tờ khai Nhà thầu (NTNN) tách riêng thành nhóm NTNN (không trộn sang GTGT/TNDN)
             from tax_parser import classify_tax_type
-            self.assertEqual(classify_tax_type("01/NTNN", "Tờ khai thuế nhà thầu nước ngoài (GTGT, TNDN)"), "Khác")
-            self.assertEqual(classify_tax_type("03/NTNN", "Tờ khai thuế thu nhập doanh nghiệp nhà thầu nước ngoài"), "Khác")
-            self.assertEqual(classify_tax_type("02/NTNN", "Tờ khai quyết toán thuế nhà thầu nước ngoài"), "Khác")
+            self.assertEqual(classify_tax_type("01/NTNN", "Tờ khai thuế nhà thầu nước ngoài (GTGT, TNDN)"), "NTNN")
+            self.assertEqual(classify_tax_type("03/NTNN", "Tờ khai thuế thu nhập doanh nghiệp nhà thầu nước ngoài"), "NTNN")
+            self.assertEqual(classify_tax_type("02/NTNN", "Tờ khai quyết toán thuế nhà thầu nước ngoài"), "NTNN")
+
+    def test_v16_ntnn_xml_tt103_vs_tt80_and_yearly_link(self) -> None:
+        """Kiểm thử v1.6: Đọc chính xác 01/NTNN theo đúng chuẩn từng thời kỳ (TT103 ct6..ct13 vs TT80 ct7..ct14), xuất So Thue NTNN TH/Cuoi, link C95/C97/C98 và đối chiếu thiếu tờ khai trên TQ_NTNN."""
+        import datetime
+        from excel_exporter import export_to_excel
+        from qhns_summarizer import integrate_tq_and_qhns_into_workbook
+        from tax_parser import parse_tax_xml
+
+        # 1. Tờ khai 01/NTNN năm 2021 theo chuẩn TT103/2014 (ct6=DT GTGT, ct7=Tỷ lệ 5%, ct8=Thuế GTGT, ct9=DT TNDN chưa gồm GTGT, ct10=Tỷ lệ 5%, ct12=Thuế TNDN, ct13=Tổng thuế)
+        xml_tt103_2021 = """<?xml version="1.0" encoding="UTF-8"?>
+<HSoThueDTu>
+  <HSoKhaiThue>
+    <TTinChung>
+      <TTinTKhaiThue>
+        <TKhaiThue>
+          <maTKhai>01/NTNN</maTKhai>
+          <tenTKhai>Tờ khai thuế nhà thầu nước ngoài</tenTKhai>
+          <moTaBMau>(Ban hành kèm theo Thông tư số 103/2014/TT-BTC)</moTaBMau>
+          <soLan>0</soLan>
+          <ngayLapTKhai>2021-06-15</ngayLapTKhai>
+          <KyKKhaiThue>
+            <kyKKhai>05/2021</kyKKhai>
+            <kyKKhaiTuNgay>2021-05-01</kyKKhaiTuNgay>
+            <kyKKhaiDenNgay>2021-05-31</kyKKhaiDenNgay>
+          </KyKKhaiThue>
+        </TKhaiThue>
+        <NNT>
+          <mst>0100000099</mst>
+          <tenNNT>Cong ty Mau A (Nop thay NTNN)</tenNNT>
+        </NNT>
+      </TTinTKhaiThue>
+    </TTinChung>
+    <CTieuTKhaiChinh>
+      <CTietTKhaiChinh>
+        <ct6>105263158</ct6>
+        <ct7>5</ct7>
+        <ct8>5263158</ct8>
+        <ct9>100000000</ct9>
+        <ct10>5</ct10>
+        <ct11>0</ct11>
+        <ct12>5000000</ct12>
+        <ct13>10263158</ct13>
+      </CTietTKhaiChinh>
+    </CTieuTKhaiChinh>
+  </HSoKhaiThue>
+</HSoThueDTu>"""
+
+        # 2. Tờ khai 01/NTNN năm 2024 theo chuẩn TT80/2021 (ct6=Ngày thanh toán, ct7=DT GTGT, ct8=Tỷ lệ 5%, ct9=Thuế GTGT, ct10=DT TNDN, ct13=Thuế TNDN, ct14=Tổng thuế)
+        # Bản chính thức lần 0 và bản bổ sung lần 1 cùng kỳ 06/2024 (bản BS1 phải thay thế bản lần 0 trên So Thue NTNN Cuoi)
+        xml_tt80_2024_ct = """<?xml version="1.0" encoding="UTF-8"?>
+<HSoThueDTu>
+  <HSoKhaiThue>
+    <TTinChung>
+      <TTinTKhaiThue>
+        <TKhaiThue>
+          <maTKhai>01/NTNN</maTKhai>
+          <tenTKhai>Tờ khai thuế nhà thầu nước ngoài</tenTKhai>
+          <moTaBMau>(Ban hành kèm theo Thông tư số 80/2021/TT-BTC)</moTaBMau>
+          <soLan>0</soLan>
+          <ngayLapTKhai>2024-07-10</ngayLapTKhai>
+          <KyKKhaiThue>
+            <kyKKhai>06/2024</kyKKhai>
+            <kyKKhaiTuNgay>2024-06-01</kyKKhaiTuNgay>
+            <kyKKhaiDenNgay>2024-06-30</kyKKhaiDenNgay>
+          </KyKKhaiThue>
+        </TKhaiThue>
+        <NNT>
+          <mst>0100000099</mst>
+          <tenNNT>Cong ty Mau A (Nop thay NTNN)</tenNNT>
+        </NNT>
+      </TTinTKhaiThue>
+    </TTinChung>
+    <CTieuTKhaiChinh>
+      <CTietTKhaiChinh>
+        <ct6>2024-06-20</ct6>
+        <ct7>210526316</ct7>
+        <ct8>5</ct8>
+        <ct9>10526316</ct9>
+        <ct10>200000000</ct10>
+        <ct11>5</ct11>
+        <ct12>0</ct12>
+        <ct13>10000000</ct13>
+        <ct14>20526316</ct14>
+      </CTietTKhaiChinh>
+    </CTieuTKhaiChinh>
+  </HSoKhaiThue>
+</HSoThueDTu>"""
+
+        xml_tt80_2024_bs1 = xml_tt80_2024_ct.replace("<soLan>0</soLan>", "<soLan>1</soLan>").replace(
+            "<ngayLapTKhai>2024-07-10</ngayLapTKhai>", "<ngayLapTKhai>2024-08-05</ngayLapTKhai>"
+        ).replace("<ct7>210526316</ct7>", "<ct7>315789474</ct7>").replace(
+            "<ct9>10526316</ct9>", "<ct9>15789474</ct9>"
+        ).replace("<ct10>200000000</ct10>", "<ct10>300000000</ct10>").replace(
+            "<ct13>10000000</ct13>", "<ct13>15000000</ct13>"
+        ).replace("<ct14>20526316</ct14>", "<ct14>30789474</ct14>")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p1 = os.path.join(tmpdir, "ntnn_2021_tt103.xml")
+            p2 = os.path.join(tmpdir, "ntnn_2024_06_ct.xml")
+            p3 = os.path.join(tmpdir, "ntnn_2024_06_bs1.xml")
+            for p, content in ((p1, xml_tt103_2021), (p2, xml_tt80_2024_ct), (p3, xml_tt80_2024_bs1)):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+            decls = [parse_tax_xml(p) for p in (p1, p2, p3)]
+            # Kiểm tra nhận diện chính xác TT103 vs TT80 (KHÔNG lệch cột!)
+            self.assertEqual(decls[0].tax_type, "NTNN")
+            self.assertEqual(decls[0].indicators["_ntnn_schema"], "TT103")
+            self.assertEqual(round(decls[0].indicators["_ntnn_dt_gtgt"]), 105_263_158)
+            self.assertEqual(round(decls[0].indicators["_ntnn_thue_gtgt"]), 5_263_158)
+            self.assertEqual(round(decls[0].indicators["_ntnn_dt_tndn"]), 100_000_000)
+            self.assertEqual(round(decls[0].indicators["_ntnn_thue_tndn"]), 5_000_000)
+
+            self.assertEqual(decls[2].indicators["_ntnn_schema"], "TT80")
+            self.assertEqual(round(decls[2].indicators["_ntnn_dt_gtgt"]), 315_789_474)
+            self.assertEqual(round(decls[2].indicators["_ntnn_thue_gtgt"]), 15_789_474)
+            self.assertEqual(round(decls[2].indicators["_ntnn_dt_tndn"]), 300_000_000)
+            self.assertEqual(round(decls[2].indicators["_ntnn_thue_tndn"]), 15_000_000)
+
+            out_xlsx = os.path.join(tmpdir, "tonghop_ntnn.xlsx")
+            export_to_excel(decls, out_xlsx)
+
+            wb = openpyxl.load_workbook(out_xlsx, data_only=False)
+            self.assertIn("So Thue NTNN TH", wb.sheetnames)
+            self.assertIn("So Thue NTNN Cuoi", wb.sheetnames)
+            self.assertIn("2021", wb.sheetnames)
+            self.assertIn("2024", wb.sheetnames)
+
+            # So Thue NTNN TH có đủ 3 tờ khai (row 2..4); So Thue NTNN Cuoi chỉ giữ 2 bản hiệu lực cuối (2021 + 2024 BS1) + 2 dòng Tổng cộng năm + 1 dòng Tổng cộng
+            ws_th = wb["So Thue NTNN TH"]
+            self.assertEqual(ws_th.max_row, 4)
+            ws_cuoi = wb["So Thue NTNN Cuoi"]
+            self.assertEqual(ws_cuoi.cell(3, 6).value, "Tổng cộng năm 2021")
+            self.assertEqual(ws_cuoi.cell(5, 6).value, "Tổng cộng năm 2024")
+            self.assertEqual(ws_cuoi.cell(4, 15).value, 300_000_000)  # Bản BS1 thay thế bản chính thức
+
+            # Kiểm tra công thức liên kết sang sheet '2021' và '2024' (C95=DT chưa gồm GTGT, C97=GTGT NTNN, C98=TNDN NTNN)
+            self.assertEqual(wb["2021"]["C95"].value, "='So Thue NTNN Cuoi'!Q3")
+            self.assertEqual(wb["2021"]["C97"].value, "='So Thue NTNN Cuoi'!N3")
+            self.assertEqual(wb["2021"]["C98"].value, "='So Thue NTNN Cuoi'!P3")
+            self.assertEqual(wb["2024"]["C95"].value, "='So Thue NTNN Cuoi'!Q5")
+            self.assertEqual(wb["2024"]["C97"].value, "='So Thue NTNN Cuoi'!N5")
+            self.assertEqual(wb["2024"]["C98"].value, "='So Thue NTNN Cuoi'!P5")
+
+            # Kiểm tra đối chiếu thiếu tờ khai trên TQ_NTNN (giả lập TQ_NTNN 2024 chỉ ghi nhận 10,000,000 GTGT < 15,789,474 tờ khai)
+            wb_tq = openpyxl.Workbook()
+            ws_tq = wb_tq.active
+            ws_tq.title = "TQ"
+            ws_tq.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_tq.append(["7901", "24CN", "1", "TK", "2862", "VND", 3_000_000, datetime.datetime(2024, 1, 15)])
+            tq_main_path = os.path.join(tmpdir, "tq_main.xlsx")
+            wb_tq.save(tq_main_path)
+
+            wb_nt = openpyxl.Workbook()
+            ws_nt = wb_nt.active
+            ws_nt.title = "TQ"
+            ws_nt.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_nt.append(["7901", "2406", "1", "TK", "1701", "VND", 10_000_000, datetime.datetime(2024, 7, 10)])
+            ws_nt.append(["7901", "2406", "2", "C2", "1701", "VND", -10_000_000, datetime.datetime(2024, 7, 12)])
+            ws_nt.append(["7901", "2406", "3", "TK", "1052", "VND", 15_000_000, datetime.datetime(2024, 7, 10)])
+            ws_nt.append(["7901", "2406", "4", "C2", "1052", "VND", -15_000_000, datetime.datetime(2024, 7, 12)])
+            tq_nt_path = os.path.join(tmpdir, "tq_ntnn.xlsx")
+            wb_nt.save(tq_nt_path)
+
+            res = integrate_tq_and_qhns_into_workbook(
+                out_xlsx, tq_main_path, year_from=2024, year_to=2024, output_path=out_xlsx, tq_ntnn_excel_path=tq_nt_path
+            )
+            self.assertTrue(any("Thuế GTGT Nhà thầu" in a for a in res["alerts"]))
+            wb_res = openpyxl.load_workbook(out_xlsx, data_only=False)
+            ws_q = wb_res["QHNS"]
+            # Năm 2024: GTGT NTNN thiếu trên TQ_NTNN -> Cột D lấy F97, Cột E lấy G97; TNDN NTNN khớp 15tr -> Cột D lấy C98
+            self.assertEqual(ws_q["D10"].value, "='2024'!F97")
+            self.assertEqual(ws_q["E10"].value, "='2024'!G97")
+            self.assertEqual(ws_q["D11"].value, "='2024'!C98")
 
 
 if __name__ == "__main__":

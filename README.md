@@ -1,8 +1,17 @@
-# Ứng Dụng Chuyển Đổi Hồ Sơ Thuế XML Sang Excel, Đối Chiếu QHNS (kèm TQ Nhà Thầu) & Tính Tiền Chậm Nộp (v1.5)
+# Ứng Dụng Chuyển Đổi Hồ Sơ Thuế XML Sang Excel, Đối Chiếu QHNS (kèm Thuế Nhà Thầu) & Tính Tiền Chậm Nộp (v1.6)
 
 Công cụ ETL (Extract – Transform – Load) chuyên dụng giúp đọc, làm sạch, chuẩn hóa và tổng hợp **100% dữ liệu từ hồ sơ khai thuế XML (HTKK / eTax)** sang file Excel chuẩn mẫu kế toán - thanh tra, kiểm tra thuế.
 
-## Tính năng nổi bật (Phiên bản v1.5)
+## Tính năng nổi bật (Phiên bản v1.6)
+- **Tổng hợp & Đối chiếu trọn bộ Tờ khai Thuế Nhà Thầu Nước Ngoài (`01/NTNN`) riêng biệt:**
+  - **Khu vực chọn riêng trên giao diện (`1b. Tờ khai Thuế Nhà Thầu XML`):** Tách riêng nút chọn nhiều file / thư mục XML Nhà thầu (MST nộp thay riêng) để không lẫn với MST công ty chính, kèm bộ lọc `Nhà thầu (NTNN)`.
+  - **Tự động nhận diện chuẩn mẫu theo từng thời kỳ (tuyệt đối không lệch cột):** Phân biệt chính xác mẫu **TT 103/2014** (`ct6..ct13`: `ct6`=DT GTGT, `ct7`=Tỷ lệ GTGT, `ct8`=Thuế GTGT, `ct9`=DT TNDN, `ct12`=Thuế TNDN, `ct13`=Tổng thuế) và mẫu **TT 80/2021** (`ct6`=Ngày thanh toán, `ct7`=DT GTGT, `ct9`=Thuế GTGT, `ct10`=DT TNDN, `ct13`=Thuế TNDN, `ct14`=Tổng thuế), cũng như các thẻ ngữ nghĩa trực tiếp.
+  - **2 sheet tổng hợp chuẩn giống hệt Thuế GTGT:**
+    1. `So Thue NTNN TH`: Toàn bộ tờ khai nhà thầu (chính thức + bổ sung) theo dòng thời gian.
+    2. `So Thue NTNN Cuoi`: Chốt bản hiệu lực cuối theo từng kỳ/ngày phát sinh, nhóm theo từng năm kèm dòng `Tổng cộng năm YYYY` (`=SUM(...)`) ngay bên dưới.
+  - **Liên kết công thức tự động vào từng sheet năm & Đối chiếu `TQ_NTNN`:**
+    - Tự động link `C95` (Doanh thu chưa bao gồm thuế GTGT), `C97` (Thuế GTGT NTNN) và `C98` (Thuế TNDN NTNN) từ `So Thue NTNN Cuoi`.
+    - Đối chiếu `C97`/`C98` với `TQ_NTNN` (`F97/G97`, `F98/G98`) theo đúng quy tắc GTGT/TNDN/TNCN: khi phát hiện Tờ khai > Tổng quan NTNN (`> 1.000đ`), tự động đưa số phát sinh TQ vào Cột (4) và số chênh lệch vào Cột (5) `Số xử lý qua thanh tra` trên `QHNS`, đồng thời đối chiếu khớp 0 đồng trên `DoiChieu_QHNS`.
 - **Hỗ trợ Sổ Tổng Quan Thuế Nhà Thầu riêng (`TQ_NTNN`):**
   - Cho phép chọn thêm file Sổ Tổng Quan riêng của MST nộp thay nhà thầu nước ngoài (`TQ_NTNN`) ngay trên giao diện `app.py`.
   - Tự động chép sheet `TQ_NTNN`, đối chiếu cột `F/G` dòng `97` (`Thuế GTGT Nhà thầu`) & `98` (`Thuế TNDN Nhà thầu`) trên từng sheet năm, đổ số liệu vào mục `4. Thuế nhà thầu` trên `QHNS`, và đưa đủ các tiểu mục `1701 (NTNN)`, `1052 (NTNN)` (cùng mọi tiểu mục phát sinh khác trên `TQ_NTNN`) vào `DoiChieu_QHNS` khớp 0 đồng.
