@@ -1130,9 +1130,10 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertIn("2021", wb.sheetnames)
             self.assertIn("2024", wb.sheetnames)
 
-            # So Thue NTNN TH có đủ 3 tờ khai (row 2..4); So Thue NTNN Cuoi chỉ giữ 2 bản hiệu lực cuối (2021 + 2024 BS1) + 2 dòng Tổng cộng năm + 1 dòng Tổng cộng
+            # So Thue NTNN TH có đủ 3 dòng hợp đồng (row 2..4) + 1 dòng TỔNG CỘNG (row 5)
             ws_th = wb["So Thue NTNN TH"]
-            self.assertEqual(ws_th.max_row, 4)
+            self.assertEqual(ws_th.max_row, 5)
+            self.assertEqual(ws_th.cell(5, 9).value, "TỔNG CỘNG")
             ws_cuoi = wb["So Thue NTNN Cuoi"]
             self.assertEqual(ws_cuoi.cell(3, 6).value, "Tổng cộng năm 2021")
             self.assertEqual(ws_cuoi.cell(5, 6).value, "Tổng cộng năm 2024")
@@ -1563,6 +1564,93 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertIn("d1.xml", kept_names)
         self.assertIn("dp.xml", kept_names)
         self.assertEqual(len(kept), 4)
+
+    def test_v16_ntnn_th_expands_all_contract_rows(self) -> None:
+        """Kiểm thử v1.6: Sheet So Thue NTNN TH xuất CHI TIẾT TẤT CẢ CÁC HỢP ĐỒNG trên từng tờ khai 01/NTNN."""
+        from excel_exporter import export_to_excel
+        from tax_parser import parse_tax_xml
+
+        xml_two_contracts = """<?xml version="1.0" encoding="UTF-8"?>
+<HSoThueDTu>
+  <HSoKhaiThue>
+    <TTinChung>
+      <TTinTKhaiThue>
+        <TKhaiThue>
+          <maTKhai>01/NTNN</maTKhai>
+          <tenTKhai>Tờ khai thuế nhà thầu nước ngoài</tenTKhai>
+          <moTaBMau>(Ban hành kèm theo Thông tư số 80/2021/TT-BTC)</moTaBMau>
+          <soLan>0</soLan>
+          <ngayLapTKhai>2024-07-10</ngayLapTKhai>
+          <KyKKhaiThue>
+            <kieuKy>M</kieuKy>
+            <kyKKhai>06/2024</kyKKhai>
+            <kyKKhaiTuNgay>2024-06-01</kyKKhaiTuNgay>
+            <kyKKhaiDenNgay>2024-06-30</kyKKhaiDenNgay>
+          </KyKKhaiThue>
+        </TKhaiThue>
+        <NNT>
+          <mst>0100000099</mst>
+          <tenNNT>Cong ty Mau D</tenNNT>
+        </NNT>
+      </TTinTKhaiThue>
+    </TTinChung>
+    <CTieuTKhaiChinh>
+      <CTietTKhaiChinh>
+        <ct2>Nha thau X - Dich vu phan mem</ct2>
+        <ct3>9900000001</ct3>
+        <ct4>HD-2024-001</ct4>
+        <ct5>2024-01-15</ct5>
+        <ct6>2024-06-10</ct6>
+        <ct7>105263158</ct7>
+        <ct8>5</ct8>
+        <ct9>5263158</ct9>
+        <ct10>100000000</ct10>
+        <ct11>5</ct11>
+        <ct12>0</ct12>
+        <ct13>5000000</ct13>
+        <ct14>10263158</ct14>
+      </CTietTKhaiChinh>
+      <CTietTKhaiChinh>
+        <ct2>Nha thau Y - Ban quyen</ct2>
+        <ct3>9900000002</ct3>
+        <ct4>HD-2024-002</ct4>
+        <ct5>2024-03-01</ct5>
+        <ct6>2024-06-25</ct6>
+        <ct7>0</ct7>
+        <ct8>0</ct8>
+        <ct9>0</ct9>
+        <ct10>200000000</ct10>
+        <ct11>10</ct11>
+        <ct12>0</ct12>
+        <ct13>20000000</ct13>
+        <ct14>20000000</ct14>
+      </CTietTKhaiChinh>
+    </CTieuTKhaiChinh>
+  </HSoKhaiThue>
+</HSoThueDTu>"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = os.path.join(tmpdir, "ntnn_2hd.xml")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(xml_two_contracts)
+            d = parse_tax_xml(p)
+            self.assertEqual(len(d.indicators.get("_ntnn_rows", [])), 2)
+
+            out_x = os.path.join(tmpdir, "out_2hd.xlsx")
+            export_to_excel([d], out_x)
+            wb = openpyxl.load_workbook(out_x, data_only=False)
+            ws_th = wb["So Thue NTNN TH"]
+            # Header (1) + 2 dòng hợp đồng (2, 3) + 1 dòng TỔNG CỘNG (4)
+            self.assertEqual(ws_th.max_row, 4)
+            self.assertEqual(ws_th.cell(2, 9).value, "Nha thau X - Dich vu phan mem")
+            self.assertEqual(ws_th.cell(2, 11).value, "HD-2024-001")
+            self.assertEqual(ws_th.cell(2, 13).value, "2024-06-10")
+            self.assertEqual(ws_th.cell(2, 16).value, 5_263_158)
+            self.assertEqual(ws_th.cell(3, 9).value, "Nha thau Y - Ban quyen")
+            self.assertEqual(ws_th.cell(3, 11).value, "HD-2024-002")
+            self.assertEqual(ws_th.cell(3, 18).value, 10)
+            self.assertEqual(ws_th.cell(3, 20).value, 20_000_000)
+            self.assertEqual(ws_th.cell(4, 9).value, "TỔNG CỘNG")
 
 
 if __name__ == "__main__":
