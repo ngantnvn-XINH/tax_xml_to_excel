@@ -3,6 +3,9 @@
 Công cụ ETL (Extract – Transform – Load) chuyên dụng giúp đọc, làm sạch, chuẩn hóa và tổng hợp **100% dữ liệu từ hồ sơ khai thuế XML (HTKK / eTax)** sang file Excel chuẩn mẫu kế toán - thanh tra, kiểm tra thuế.
 
 ## Tính năng nổi bật (Phiên bản v1.6)
+- **Tùy chọn tách mỗi sắc thuế ra 1 file Excel riêng (kèm đối chiếu theo từng kỳ kê khai):**
+  - Ô tích chọn **`Tách mỗi sắc thuế ra 1 file riêng (đối chiếu theo kỳ)`** (mặc định **tắt**, chỉ xuất khi người dùng chủ động tích chọn) xuất riêng từng file `*_GTGT.xlsx`, `*_TNDN.xlsx`, `*_TNCN.xlsx`, `*_NTNN.xlsx`, `*_BCTC.xlsx`, `*_Khac.xlsx`.
+  - Khi có Sổ Tổng Quan (`TQ` và/hoặc `TQ_NTNN`), tự động chèn thêm sheet **`DoiChieu_KyKeKhai`** đối chiếu trực tiếp từng kỳ kê khai (`MM/YYYY`, `Q#/YYYY`, `Năm YYYY`) giữa Tờ khai với Phát sinh & Số đã nộp trên Sổ TQ.
 - **Lọc đúng Mã Cơ quan thuế quản lý khi lên QHNS & tách riêng CQT khác (`TQ_CQT_Khac`):**
   - Cho phép nhập trực tiếp **`Mã CQT quản lý (QHNS)`** trên giao diện `app.py` (mặc định `7901`, có thể đổi sang bất kỳ mã CQT nào như `7903`, `0101`... hoặc để trống nếu lấy tất cả).
   - Biểu `QHNS`, đối chiếu `F/G` trên từng năm và `DoiChieu_QHNS` chỉ lấy đúng số liệu của CQT quản lý đã nhập; toàn bộ phát sinh/đã nộp tại các CQT khác tự động tách riêng sang sheet **`TQ_CQT_Khac`** (gồm Bảng 1 tổng hợp theo Mã CQT × Năm × Tiểu mục và Bảng 2 chi tiết từng dòng giao dịch).

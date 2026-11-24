@@ -14,7 +14,10 @@ from typing import Dict, List
 
 from excel_exporter import export_to_excel
 from penalty_calculator import parse_cutoff_date
-from qhns_summarizer import integrate_tq_and_qhns_into_workbook
+from qhns_summarizer import (
+    integrate_period_reconciliation_for_tax_type,
+    integrate_tq_and_qhns_into_workbook,
+)
 from tax_parser import TaxDeclaration, parse_tax_xml
 
 
@@ -158,14 +161,23 @@ class TaxXmlToExcelApp:
         self.var_split_year = tk.BooleanVar(value=False)
         self.var_open_after = tk.BooleanVar(value=True)
 
-        ttk.Checkbutton(row_opt1, text="Xuất kèm phụ lục (05-1, 05-2, 05-3...)", variable=self.var_appendix).pack(
-            side=tk.LEFT, padx=6
+        ttk.Checkbutton(row_opt1, text="Xuất kèm phụ lục", variable=self.var_appendix).pack(
+            side=tk.LEFT, padx=4
         )
-        ttk.Checkbutton(row_opt1, text="Mỗi năm ra 1 file Excel riêng (VD: QTT_TNCN_2024.xlsx)", variable=self.var_split_year).pack(
-            side=tk.LEFT, padx=6
-        )
+        ttk.Checkbutton(
+            row_opt1,
+            text="Tách mỗi sắc thuế ra 1 file riêng (đối chiếu theo kỳ)",
+            variable=self.var_split,
+            command=lambda: self.var_split_year.set(False) if self.var_split.get() else None,
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(
+            row_opt1,
+            text="Mỗi năm ra 1 file riêng",
+            variable=self.var_split_year,
+            command=lambda: self.var_split.set(False) if self.var_split_year.get() else None,
+        ).pack(side=tk.LEFT, padx=4)
         ttk.Checkbutton(row_opt1, text="Mở file sau khi xuất", variable=self.var_open_after).pack(
-            side=tk.LEFT, padx=6
+            side=tk.LEFT, padx=4
         )
 
         row_opt2 = ttk.Frame(opt_frame)
@@ -578,6 +590,7 @@ class TaxXmlToExcelApp:
 
                 qhns_alerts: List[str] = []
                 qhns_done = False
+                period_dc_count = 0
                 if (valid_tq or valid_ntnn) and created and not split_files and not split_years:
                     self.root.after(0, lambda: self.lbl_status.config(text="Đang đối chiếu TQ & lên QHNS..."))
                     qhns_res = integrate_tq_and_qhns_into_workbook(
@@ -592,6 +605,24 @@ class TaxXmlToExcelApp:
                     )
                     qhns_alerts = qhns_res.get("alerts", [])
                     qhns_done = True
+                elif (valid_tq or valid_ntnn) and created and split_files and not split_years:
+                    self.root.after(0, lambda: self.lbl_status.config(text="Đang đối chiếu theo kỳ kê khai cho từng sắc thuế..."))
+                    for fpath in created:
+                        stem = os.path.splitext(os.path.basename(fpath))[0]
+                        t_type = stem.rsplit("_", 1)[-1] if "_" in stem else ""
+                        if t_type.upper() == "BCTC":
+                            continue
+                        dc_res = integrate_period_reconciliation_for_tax_type(
+                            fpath,
+                            t_type,
+                            tq_excel_path=valid_tq,
+                            tq_ntnn_excel_path=valid_ntnn,
+                            year_from=y_from,
+                            year_to=y_to,
+                            target_cqt=target_cqt,
+                        )
+                        if dc_res.get("reconciled"):
+                            period_dc_count += 1
 
                 def on_done() -> None:
                     self.btn_export.config(state=tk.NORMAL)
@@ -605,10 +636,13 @@ class TaxXmlToExcelApp:
                             msg += "\nĐã tích hợp thêm Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) vào QHNS & DoiChieu_QHNS!"
                         if qhns_alerts:
                             msg += "\n\nLƯU Ý PHÁT HIỆN CHÊNH LỆCH TỜ KHAI vs TỔNG QUAN:\n- " + "\n- ".join(qhns_alerts)
+                    elif period_dc_count > 0:
+                        msg += f"\n\nĐã tích hợp sheet 'DoiChieu_KyKeKhai' (đối chiếu từng kỳ kê khai với Sổ TQ) vào {period_dc_count} file sắc thuế!"
                     messagebox.showinfo("Hoàn tất", msg)
                     if open_after and created:
                         try:
-                            os.startfile(created[0])
+                            target_open = os.path.dirname(created[0]) if len(created) > 1 else created[0]
+                            os.startfile(target_open)
                         except Exception:
                             pass
 

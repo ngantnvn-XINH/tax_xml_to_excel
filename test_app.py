@@ -1317,6 +1317,102 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(wb_out["QHNS"]["D10"].value, "='2024'!C97")
             self.assertEqual(wb_out["QHNS"]["F10"].value, 5_000_000)
 
+    def test_v16_split_by_tax_type_period_reconciliation(self) -> None:
+        """Kiểm thử v1.6: Tách mỗi sắc thuế ra 1 file riêng (khi người dùng tích chọn) và đối chiếu từng kỳ kê khai (DoiChieu_KyKeKhai)."""
+        import datetime
+        from excel_exporter import export_to_excel
+        from qhns_summarizer import integrate_period_reconciliation_for_tax_type
+        from tax_parser import TaxDeclaration
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d_gtgt = TaxDeclaration(
+                file_path="gtgt_01_2024.xml",
+                file_name="gtgt_01_2024.xml",
+                tax_type="GTGT",
+                ma_tkhai="01/GTGT",
+                ten_tkhai="Tờ khai thuế GTGT",
+                mst="0100000088",
+                ten_nnt="Cong ty Mau B",
+                ky_kkhai="01/2024",
+                tu_ngay=datetime.date(2024, 1, 1),
+                den_ngay=datetime.date(2024, 1, 31),
+                ngay_lap=datetime.date(2024, 2, 18),
+                so_lan="0",
+                indicators={"ct40": 15_000_000, "ct40a": 15_000_000},
+            )
+            d_ntnn = TaxDeclaration(
+                file_path="ntnn_06_2024.xml",
+                file_name="ntnn_06_2024.xml",
+                tax_type="NTNN",
+                ma_tkhai="01/NTNN",
+                ten_tkhai="Tờ khai thuế nhà thầu nước ngoài",
+                mst="0100000099",
+                ten_nnt="Cong ty Mau B (NTNN)",
+                ky_kkhai="06/2024",
+                tu_ngay=datetime.date(2024, 6, 1),
+                den_ngay=datetime.date(2024, 6, 30),
+                ngay_lap=datetime.date(2024, 7, 10),
+                so_lan="0",
+                indicators={
+                    "_ntnn_dt_gtgt": 105_263_158,
+                    "_ntnn_thue_gtgt": 5_263_158,
+                    "_ntnn_dt_tndn": 100_000_000,
+                    "_ntnn_thue_tndn": 5_000_000,
+                    "_ntnn_tong_thue": 10_263_158,
+                    "_ntnn_schema": "TT80",
+                },
+            )
+
+            base_out = os.path.join(tmpdir, "TongHop.xlsx")
+            created = export_to_excel([d_gtgt, d_ntnn], base_out, split_by_tax_type=True)
+            self.assertEqual(len(created), 2)
+            gtgt_file = [p for p in created if p.endswith("_GTGT.xlsx")][0]
+            ntnn_file = [p for p in created if p.endswith("_NTNN.xlsx")][0]
+
+            # Tạo Sổ TQ cho GTGT và TQ_NTNN cho NTNN
+            wb_tq = openpyxl.Workbook()
+            ws_tq = wb_tq.active
+            ws_tq.title = "TQ"
+            ws_tq.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_tq.append(["7901", "2401", "1", "TK", "1701", "VND", 15_000_000, datetime.datetime(2024, 2, 18)])
+            ws_tq.append(["7901", "2401", "2", "C2", "1701", "VND", -15_000_000, datetime.datetime(2024, 2, 20)])
+            tq_path = os.path.join(tmpdir, "tq.xlsx")
+            wb_tq.save(tq_path)
+
+            wb_nt = openpyxl.Workbook()
+            ws_nt = wb_nt.active
+            ws_nt.title = "TQ"
+            ws_nt.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_nt.append(["7901", "2406", "1", "TK", "1701", "VND", 5_263_158, datetime.datetime(2024, 7, 10)])
+            ws_nt.append(["7901", "2406", "2", "C2", "1701", "VND", -5_263_158, datetime.datetime(2024, 7, 12)])
+            ws_nt.append(["7901", "2406", "3", "TK", "1052", "VND", 5_000_000, datetime.datetime(2024, 7, 10)])
+            ws_nt.append(["7901", "2406", "4", "C2", "1052", "VND", -3_000_000, datetime.datetime(2024, 7, 12)])
+            nt_path = os.path.join(tmpdir, "tq_ntnn.xlsx")
+            wb_nt.save(nt_path)
+
+            r_g = integrate_period_reconciliation_for_tax_type(gtgt_file, "GTGT", tq_excel_path=tq_path, target_cqt="7901")
+            r_n = integrate_period_reconciliation_for_tax_type(ntnn_file, "NTNN", tq_ntnn_excel_path=nt_path, target_cqt="7901")
+            self.assertTrue(r_g["reconciled"])
+            self.assertTrue(r_n["reconciled"])
+
+            wb_g_out = openpyxl.load_workbook(gtgt_file, data_only=False)
+            self.assertIn("DoiChieu_KyKeKhai", wb_g_out.sheetnames)
+            ws_dc_g = wb_g_out["DoiChieu_KyKeKhai"]
+            self.assertEqual(ws_dc_g["B3"].value, "01/2024")
+            self.assertEqual(ws_dc_g["E3"].value, "='So Thue GTGT Cuoi'!AJ3")
+            self.assertEqual(ws_dc_g["F3"].value, 15_000_000)
+            self.assertEqual(ws_dc_g["H3"].value, 15_000_000)
+
+            wb_n_out = openpyxl.load_workbook(ntnn_file, data_only=False)
+            self.assertIn("DoiChieu_KyKeKhai", wb_n_out.sheetnames)
+            ws_dc_n = wb_n_out["DoiChieu_KyKeKhai"]
+            self.assertEqual(ws_dc_n["B3"].value, "06/2024")
+            self.assertEqual(ws_dc_n["D3"].value, "1052")
+            self.assertEqual(ws_dc_n["F3"].value, 5_000_000)
+            self.assertEqual(ws_dc_n["H3"].value, 3_000_000)
+            self.assertEqual(ws_dc_n["D4"].value, "1701")
+            self.assertEqual(ws_dc_n["F4"].value, 5_263_158)
+
 
 if __name__ == "__main__":
     unittest.main()
