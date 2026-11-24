@@ -143,10 +143,24 @@ def parse_tq_rows(ws_tq) -> List[Dict[str, Any]]:
     header_row, col_map = detect_tq_layout(ws_tq)
     rows: List[Dict[str, Any]] = []
     for r in range(header_row + 1, ws_tq.max_row + 1):
-        so_tien = ws_tq.cell(r, col_map["so_tien"]).value
+        raw_st = ws_tq.cell(r, col_map["so_tien"]).value
+        if isinstance(raw_st, (int, float)) and not isinstance(raw_st, bool):
+            so_tien = float(raw_st)
+        elif isinstance(raw_st, str) and raw_st.strip():
+            s_num = raw_st.strip().replace(" ", "").replace(",", "")
+            try:
+                so_tien = float(s_num)
+            except ValueError:
+                so_tien = None
+        else:
+            so_tien = None
         ngay_ht = parse_date(ws_tq.cell(r, col_map["ngay_ht"]).value)
         gd = str(ws_tq.cell(r, col_map["gd"]).value or "").strip().upper()
-        tm = str(ws_tq.cell(r, col_map["tm"]).value or "").strip()
+        raw_tm = ws_tq.cell(r, col_map["tm"]).value
+        if isinstance(raw_tm, float) and raw_tm.is_integer():
+            tm = str(int(raw_tm))
+        else:
+            tm = str(raw_tm or "").strip()
         ky = str(ws_tq.cell(r, col_map["ky"]).value or "").strip().upper()
         no_co = ""
         if "no_co" in col_map:
@@ -158,7 +172,7 @@ def parse_tq_rows(ws_tq) -> List[Dict[str, Any]]:
             cqt_raw = str(raw_v or "").strip()
             cqt_code = _normalize_cqt(raw_v)
 
-        if not isinstance(so_tien, (int, float)) or not ngay_ht or not gd or not tm:
+        if so_tien is None or not ngay_ht or not gd or not tm:
             continue
 
         rows.append({
@@ -825,6 +839,22 @@ def integrate_tq_and_qhns_into_workbook(
     metrics = compute_tq_metrics(tq_rows, start_year, end_year)
     decl_vals = _eval_year_sheet_values(excel_path, years)
 
+    # Tính riêng phần TNCN phân bổ (PP, tiểu mục 1001) hạch toán tại các CQT khác để CỘNG vào số phát sinh TNCN (F90 & QHNS Cột 4)
+    # vì tờ khai 05/QTT-TNCN (C90) kê khai tổng toàn công ty bao gồm cả phần phân bổ sang CQT khác,
+    # trong khi số đã nộp (C2) tại CQT khác vẫn tách riêng sang sheet TQ_CQT_Khac.
+    all_c2_vals = [x["so_tien"] for x in all_tq_rows if x["gd"] == "C2" and x["so_tien"] != 0]
+    all_c2_neg = bool(all_c2_vals and sum(1 for v in all_c2_vals if v < 0) >= len(all_c2_vals) / 2)
+    tncn_pp_other_by_ky: Dict[int, float] = {y: 0.0 for y in years}
+    for item in other_tq_rows:
+        if item["tm"] == "1001" and item["gd"] == "PP" and item["ky_year"] in years:
+            val = item["so_tien"]
+            no_co = item.get("no_co", "")
+            if no_co in ("C", "N") and not all_c2_neg and val >= 0:
+                signed_v = val if no_co == "N" else -val
+            else:
+                signed_v = val
+            tncn_pp_other_by_ky[item["ky_year"]] += signed_v
+
     # 2b. Đọc Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) nếu người dùng cung cấp
     ntnn_metrics: Optional[Dict[str, Any]] = None
     ws_ntnn_src = None
@@ -914,7 +944,9 @@ def integrate_tq_and_qhns_into_workbook(
             tndn_missing_info[y] = None
 
         # --- Dòng 90: Tổng hợp tổng số thuế TNCN phải khấu trừ ---
-        f90_val = round(metrics["tncn_tk_th_tq_by_ky"][y])
+        f90_main_val = round(metrics["tncn_tk_th_tq_by_ky"][y])
+        pp_other_val = round(tncn_pp_other_by_ky[y])
+        f90_val = f90_main_val + pp_other_val
         c90_val = round(decl_vals[y]["tncn_c90"])
 
         # Nếu năm cuối (VD 2025) chưa có tờ khai Quyết toán 05/QTT-TNCN (C90 = 0) mà TQ có phát sinh -> lấy F90 vào C90
@@ -931,14 +963,19 @@ def integrate_tq_and_qhns_into_workbook(
         ws_y["G90"].number_format = num_fmt
         ws_y["G90"].font = font_bold
 
+        pp_note = (
+            f" (CQT {norm_cqt or 'chính'}: {f90_main_val:,.0f} + PP phân bổ CQT khác: {pp_other_val:,.0f})"
+            if pp_other_val != 0
+            else ""
+        )
         if diff_tncn > 1000:
             missing_p = sorted(metrics["tncn_c2_periods"][y] - metrics["tncn_tk_periods"][y])
             miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
-            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan rà soát thiếu TK {miss_str}", "QHNS")
+            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note} rà soát thiếu TK {miss_str}", "QHNS")
             tncn_missing_info[y] = miss_str
             alerts.append(f"Năm {y} - Thuế TNCN: Tờ khai QTT ({c90_val:,.0f}) > Tổng quan ({f90_val:,.0f}), chênh lệch {diff_tncn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra (thiếu TK {miss_str}).")
         else:
-            ws_y["F90"].comment = Comment("Phát sinh TK; TH; TQ; PP trên tổng quan", "QHNS")
+            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note}", "QHNS")
             tncn_missing_info[y] = None
 
         ws_y.column_dimensions["F"].width = 18
@@ -1225,11 +1262,13 @@ def integrate_tq_and_qhns_into_workbook(
         else:
             ws_q.cell(r_tn, 3, f"=G{prev_rows['tncn']}")
 
+        pp_other_y = round(tncn_pp_other_by_ky[y])
         if has_sheet:
             if tncn_missing_info.get(y):
                 ws_q.cell(r_tn, 4, f"='{sname}'!F90")
                 ws_q.cell(r_tn, 4).comment = Comment(
-                    f"Vì bị thiếu tờ khai {tncn_missing_info[y]} nên số phát sinh trên tổng quan bị thiếu, nên khi thể hiện số phát sinh sẽ lấy trên tổng quan",
+                    f"Vì bị thiếu tờ khai {tncn_missing_info[y]} nên số phát sinh trên tổng quan bị thiếu, nên khi thể hiện số phát sinh sẽ lấy trên tổng quan"
+                    + (f" (đã bao gồm PP phân bổ CQT khác: {pp_other_y:,.0f})" if pp_other_y != 0 else ""),
                     "QHNS",
                 )
                 ws_q.cell(r_tn, 5, f"='{sname}'!G90")
@@ -1240,8 +1279,13 @@ def integrate_tq_and_qhns_into_workbook(
                 tncn_e_cells.append(f"E{r_tn}")
             else:
                 ws_q.cell(r_tn, 4, f"='{sname}'!C90")
+                if pp_other_y != 0:
+                    ws_q.cell(r_tn, 4).comment = Comment(
+                        f"Đã bao gồm phần TNCN phân bổ (PP) sang CQT khác: {pp_other_y:,.0f} (số đã nộp tại CQT khác tách riêng ở sheet TQ_CQT_Khac)",
+                        "QHNS",
+                    )
         else:
-            ws_q.cell(r_tn, 4, round(metrics["tncn_tk_th_tq_by_ky"][y]))
+            ws_q.cell(r_tn, 4, round(metrics["tncn_tk_th_tq_by_ky"][y] + tncn_pp_other_by_ky[y]))
 
         ws_q.cell(r_tn, 6, round(metrics["tncn_c2_by_ht"][y]))
         tncn_sp_notes = special_nop_notes.get(("1001", y), [])
@@ -1394,11 +1438,14 @@ def integrate_tq_and_qhns_into_workbook(
                 rounding_diff_refs["1052"].append(f"'{sname}'!G76")
             if not tncn_missing_info.get(y):
                 c90_eff = round(decl_vals[y]["tncn_c90"])
-                f90_eff = round(metrics["tncn_tk_th_tq_by_ky"][y])
-                if c90_eff == 0 and f90_eff > 0:
-                    c90_eff = f90_eff
-                rounding_diff["1001"] += c90_eff - f90_eff
+                f90_tot_eff = round(metrics["tncn_tk_th_tq_by_ky"][y] + tncn_pp_other_by_ky[y])
+                if c90_eff == 0 and f90_tot_eff > 0:
+                    c90_eff = f90_tot_eff
+                rounding_diff["1001"] += c90_eff - f90_tot_eff
                 rounding_diff_refs["1001"].append(f"'{sname}'!G90")
+            if pp_other_y != 0:
+                rounding_diff["1001"] += pp_other_y
+                rounding_diff_refs["1001"].append(f"({pp_other_y})" if pp_other_y < 0 else str(pp_other_y))
             if ntnn_metrics is not None:
                 c97_eff = round(decl_vals[y]["ntnn_c97"])
                 f97_eff = round(ntnn_metrics["gtgt_tk_by_ky"][y])

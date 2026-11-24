@@ -1229,6 +1229,54 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertIn("0101", cqt_codes_b1)
             self.assertIn("7401", cqt_codes_b1)
 
+    def test_v16_tncn_pp_other_cqt_included_in_accrual(self) -> None:
+        """Kiểm thử v1.6: PP phân bổ Thuế TNCN (1001) hạch toán ở CQT khác (VD 0101) vẫn được cộng vào F90 & phát sinh TNCN, còn số nộp C2 ở CQT khác vẫn tách sang TQ_CQT_Khac và DoiChieu_QHNS khớp 0đ."""
+        import datetime
+        from qhns_summarizer import integrate_tq_and_qhns_into_workbook
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wb_decl = openpyxl.Workbook()
+            ws24 = wb_decl.active
+            ws24.title = "2024"
+            ws24["C23"] = 0
+            ws24["C76"] = 0
+            # Tờ khai QTT TNCN toàn công ty = 100tr (80tr tại 7901 + 20tr phân bổ PP sang 0101)
+            ws24["C90"] = 100_000_000
+            decl_path = os.path.join(tmpdir, "decl_pp.xlsx")
+            wb_decl.save(decl_path)
+
+            wb_tq = openpyxl.Workbook()
+            ws_tq = wb_tq.active
+            ws_tq.title = "TQ"
+            ws_tq.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_tq.append(["7901", "24CN", "1", "TK", "1001", "VND", 80_000_000, datetime.datetime(2024, 12, 20)])
+            ws_tq.append(["7901", "24CN", "2", "C2", "1001", "VND", -80_000_000, datetime.datetime(2024, 12, 22)])
+            # Phân bổ PP sang CQT khác 0101 (20tr) và nộp C2 tại 0101 (-20tr)
+            ws_tq.append(["0101", "24CN", "3", "PP", "1001", "VND", 20_000_000, datetime.datetime(2024, 12, 20)])
+            ws_tq.append(["0101", "24CN", "4", "C2", "1001", "VND", -20_000_000, datetime.datetime(2024, 12, 22)])
+            tq_path = os.path.join(tmpdir, "tq_pp.xlsx")
+            wb_tq.save(tq_path)
+
+            out_path = os.path.join(tmpdir, "out_pp.xlsx")
+            res = integrate_tq_and_qhns_into_workbook(
+                decl_path, tq_path, year_from=2024, year_to=2024, output_path=out_path, target_cqt="7901"
+            )
+
+            wb_out = openpyxl.load_workbook(out_path, data_only=False)
+            # 1. F90 trên sheet 2024 phải bằng 100tr (80tr tại 7901 + 20tr PP tại 0101) -> KHÔNG báo thiếu tờ khai!
+            self.assertEqual(wb_out["2024"]["F90"].value, 100_000_000)
+            self.assertFalse(any("thiếu TK" in a for a in res["alerts"]))
+            # 2. Trên QHNS: D8 (Phát sinh TNCN) = ='2024'!C90 (100tr, có cả PP), F8 (Đã nộp tại 7901) = 80tr
+            ws_q = wb_out["QHNS"]
+            self.assertEqual(ws_q["D8"].value, "='2024'!C90")
+            self.assertEqual(ws_q["F8"].value, 80_000_000)
+            # 3. Trên DoiChieu_QHNS: F5 (TNCN) = ='2024'!G90+20000000 -> quy đổi khớp 0đ với dư cuối 7901 (H5 = 0)
+            ws_dc = wb_out["DoiChieu_QHNS"]
+            self.assertEqual(ws_dc["F5"].value, "='2024'!G90+20000000")
+            self.assertEqual(ws_dc["H5"].value, 0)
+            # 4. TQ_CQT_Khac vẫn tách riêng 20tr PP và 20tr C2 tại 0101
+            self.assertIn("TQ_CQT_Khac", wb_out.sheetnames)
+
 
 if __name__ == "__main__":
     unittest.main()
