@@ -1503,6 +1503,56 @@ class TestTaxXmlToExcel(unittest.TestCase):
             ws_tn = wb_tn["QHNS_TheoKy"]
             self.assertEqual(ws_tn["F4"].value, 10_000_000)
 
+    def test_v16_ntnn_monthly_latest_vs_daily_sum_both(self) -> None:
+        """Kiểm thử v1.6: NTNN theo tháng lấy tờ khai cuối cùng; NTNN theo lần phát sinh (theo ngày) cộng cả Chính thức và Bổ sung."""
+        import datetime
+        from ntnn_exporter import filter_latest_ntnn_declarations, is_ntnn_per_occurrence
+        from tax_parser import TaxDeclaration
+
+        # 1. Nộp theo THÁNG (06/2024): Chính thức + Bổ sung lần 1 -> chỉ giữ Bổ sung lần 1
+        d_m0 = TaxDeclaration(
+            file_path="m0.xml", file_name="m0.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ky_kkhai="06/2024",
+            tu_ngay=datetime.date(2024, 6, 1), den_ngay=datetime.date(2024, 6, 30),
+            ngay_lap=datetime.date(2024, 7, 10), so_lan="0",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_tndn": 100_000_000, "_ntnn_thue_tndn": 5_000_000},
+        )
+        d_m1 = TaxDeclaration(
+            file_path="m1.xml", file_name="m1.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ky_kkhai="06/2024",
+            tu_ngay=datetime.date(2024, 6, 1), den_ngay=datetime.date(2024, 6, 30),
+            ngay_lap=datetime.date(2024, 8, 5), so_lan="1",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_tndn": 150_000_000, "_ntnn_thue_tndn": 7_500_000},
+        )
+
+        # 2. Nộp theo LẦN PHÁT SINH (ngày 15/06/2024): Chính thức + Bổ sung lần 1 -> GIỮ & CỘNG CẢ 2!
+        d_d0 = TaxDeclaration(
+            file_path="d0.xml", file_name="d0.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ky_kkhai="15/06/2024",
+            tu_ngay=datetime.date(2024, 6, 15), den_ngay=datetime.date(2024, 6, 15),
+            ngay_lap=datetime.date(2024, 6, 20), so_lan="0",
+            indicators={"_kieu_ky": "D", "_ntnn_dt_tndn": 40_000_000, "_ntnn_thue_tndn": 2_000_000},
+        )
+        d_d1 = TaxDeclaration(
+            file_path="d1.xml", file_name="d1.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ky_kkhai="15/06/2024",
+            tu_ngay=datetime.date(2024, 6, 15), den_ngay=datetime.date(2024, 6, 15),
+            ngay_lap=datetime.date(2024, 6, 25), so_lan="1",
+            indicators={"_kieu_ky": "D", "_ntnn_dt_tndn": 60_000_000, "_ntnn_thue_tndn": 3_000_000},
+        )
+
+        self.assertFalse(is_ntnn_per_occurrence(d_m0))
+        self.assertTrue(is_ntnn_per_occurrence(d_d0))
+
+        kept = filter_latest_ntnn_declarations([d_m0, d_m1, d_d0, d_d1])
+        kept_names = [d.file_name for d in kept]
+        # Tháng: bỏ m0, chỉ giữ m1; Lần phát sinh: giữ CẢ d0 và d1!
+        self.assertNotIn("m0.xml", kept_names)
+        self.assertIn("m1.xml", kept_names)
+        self.assertIn("d0.xml", kept_names)
+        self.assertIn("d1.xml", kept_names)
+        self.assertEqual(len(kept), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

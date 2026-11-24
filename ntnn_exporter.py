@@ -416,25 +416,72 @@ def _sort_key_ntnn(d: TaxDeclaration) -> Tuple[int, datetime.date, str, int, dat
     return (yr, tn, d.ky_kkhai or "", lan, nl, d.file_name or "")
 
 
+def is_ntnn_per_occurrence(d: TaxDeclaration) -> bool:
+    """
+    Phân biệt tờ khai Thuế Nhà Thầu kê khai theo LẦN PHÁT SINH (THEO NGÀY) với kê khai theo THÁNG/QUÝ/NĂM:
+    - Trả về True (lần phát sinh theo ngày) nếu:
+        * Thẻ XML <kieuKy> == 'D'
+        * Hoặc ky_kkhai có dạng ngày cụ thể (dd/mm/yyyy, yyyy-mm-dd, dd-mm-yyyy)
+        * Hoặc tu_ngay == den_ngay (kỳ 1 ngày duy nhất)
+    - Trả về False nếu kê khai theo tháng ('06/2024', tu_ngay=01..30), quý ('Q2/2024') hoặc năm ('2024').
+    """
+    kieu_ky = str((d.indicators or {}).get("_kieu_ky") or "").strip().upper()
+    if kieu_ky == "D":
+        return True
+    if kieu_ky in ("M", "Q", "Y"):
+        return False
+
+    ky = str(d.ky_kkhai or "").strip()
+    if re.match(r"^(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})$", ky):
+        return True
+
+    if d.tu_ngay and d.den_ngay and d.tu_ngay == d.den_ngay:
+        return True
+
+    return False
+
+
 def filter_latest_ntnn_declarations(declarations: List[TaxDeclaration]) -> List[TaxDeclaration]:
     """
-    Chốt tờ khai NTNN hiệu lực cuối cùng cho từng kỳ:
-    - Với kê khai theo tháng/quý: mỗi (MST, kỳ kê khai) giữ bản có so_lan lớn nhất (cùng lần giữ ngay_lap mới nhất).
-    - Với kê khai theo từng lần phát sinh (có tu_ngay/den_ngay cụ thể): nhóm theo (MST, kỳ kê khai, tu_ngay, den_ngay)
-      để giữ đầy đủ tất cả các lần phát sinh khác nhau trong năm và chỉ thay thế bản cũ khi có bản Bổ sung của đúng lần đó.
+    Chốt danh sách tờ khai NTNN đưa vào 'So Thue NTNN Cuoi' theo ĐÚNG quy tắc nghiệp vụ:
+    1. Tờ khai NTNN kê khai THEO THÁNG / QUÝ / NĂM:
+       - Mỗi (MST, kỳ kê khai) chỉ lấy 01 tờ khai hiệu lực CUỐI CÙNG (so_lan lớn nhất; cùng lần giữ ngay_lap mới nhất).
+    2. Tờ khai NTNN kê khai THEO LẦN PHÁT SINH (THEO NGÀY):
+       - GIỮ VÀ CỘNG TẤT CẢ CẢ TỜ KHAI CHÍNH THỨC VÀ TỜ KHAI BỔ SUNG (chỉ loại bản trùng file giống hệt nhau
+         nếu người dùng lỡ kéo nạp cùng 1 file 2 lần).
     """
-    grouped: Dict[Tuple[str, str, Optional[datetime.date], Optional[datetime.date]], List[TaxDeclaration]] = {}
+    periodic_grouped: Dict[Tuple[str, str], List[TaxDeclaration]] = {}
+    per_occurrence_list: List[TaxDeclaration] = []
+    seen_occ_fp: Set[Tuple[Any, ...]] = set()
+
     for d in declarations:
-        key = (d.mst or "", d.ky_kkhai or "", d.tu_ngay, d.den_ngay)
-        grouped.setdefault(key, []).append(d)
+        if is_ntnn_per_occurrence(d):
+            m = get_ntnn_metrics(d)
+            fp = (
+                d.mst or "",
+                d.ky_kkhai or "",
+                str(d.so_lan or "0").strip(),
+                d.ngay_lap,
+                d.file_name or "",
+                round(m["dt_gtgt"]),
+                round(m["thue_gtgt"]),
+                round(m["dt_tndn"]),
+                round(m["thue_tndn"]),
+            )
+            if fp not in seen_occ_fp:
+                seen_occ_fp.add(fp)
+                per_occurrence_list.append(d)
+        else:
+            ky_key = (d.ky_kkhai or "").strip().upper() or (d.tu_ngay.strftime("%m/%Y") if d.tu_ngay else "")
+            periodic_grouped.setdefault((d.mst or "", ky_key), []).append(d)
 
-    latest: List[TaxDeclaration] = []
-    for _, dlist in grouped.items():
+    result: List[TaxDeclaration] = list(per_occurrence_list)
+    for _, dlist in periodic_grouped.items():
         dlist.sort(key=_sort_key_ntnn)
-        latest.append(dlist[-1])
+        result.append(dlist[-1])
 
-    latest.sort(key=_sort_key_ntnn)
-    return latest
+    result.sort(key=_sort_key_ntnn)
+    return result
 
 
 NTNN_HEADERS = [

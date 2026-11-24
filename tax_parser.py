@@ -785,6 +785,7 @@ def parse_tax_xml(file_path: str) -> TaxDeclaration:
         so_lan = "1"
 
     ky_node = find_child(tkhai_thue, "KyKKhaiThue")
+    kieu_ky = find_descendant_text(ky_node, "kieuKy").strip().upper()
     ky_kkhai = find_descendant_text(ky_node, "kyKKhai")
     tu_ngay = parse_date(find_descendant_text(ky_node, "kyKKhaiTuNgay"))
     den_ngay = parse_date(find_descendant_text(ky_node, "kyKKhaiDenNgay"))
@@ -809,6 +810,8 @@ def parse_tax_xml(file_path: str) -> TaxDeclaration:
                 indicators.update(child_flat)
 
     tieu_muc = str(indicators.get("tieuMucHachToan") or "")
+    if kieu_ky:
+        indicators["_kieu_ky"] = kieu_ky
 
     # 2. Trích xuất phụ lục (<PLuc>) và tách riêng chỉ tiêu KQKD (03-1A/TNDN hoặc PL_KQHDSXKD)
     pluc_node = find_child(hso_khai, "PLuc")
