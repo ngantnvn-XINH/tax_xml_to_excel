@@ -782,7 +782,7 @@ def _write_other_cqt_sheet(
 
 def integrate_tq_and_qhns_into_workbook(
     excel_path: str,
-    tq_excel_path: str,
+    tq_excel_path: Optional[str] = None,
     so_nop_excel_path: Optional[str] = None,
     year_from: Optional[int] = None,
     year_to: Optional[int] = None,
@@ -792,31 +792,47 @@ def integrate_tq_and_qhns_into_workbook(
     target_cqt: Optional[str] = "7901",
 ) -> Dict[str, Any]:
     """
-    Hàm tích hợp chính:
-    1. Đọc Sổ Tổng Quan (TQ) từ tq_excel_path và chèn vào workbook excel_path.
+    Hàm tích hợp chính (hỗ trợ linh hoạt: chỉ có TQ công ty, chỉ có TQ_NTNN nhà thầu, hoặc cả 2):
+    1. Đọc Sổ Tổng Quan (TQ và/hoặc TQ_NTNN) và chèn vào workbook excel_path.
     2. Lọc đúng Cơ quan thuế quản lý (mặc định target_cqt='7901') để lên QHNS & đối chiếu F/G;
        tự động tách riêng các dòng giao dịch thuộc CQT khác sang sheet 'TQ_CQT_Khac'.
-    3. Cập nhật cột đối chiếu F & G kèm Comment trên các sheet Năm ('2020'..'2025') cho GTGT, TNDN, TNCN, NTNN.
+    3. Cập nhật cột đối chiếu F & G kèm Comment trên các sheet Năm ('2020'..'2025') cho đúng các sắc thuế có TQ.
     4. Sinh sheet QHNS & DoiChieu_QHNS chuẩn nghiệp vụ thanh tra - kiểm tra thuế.
     5. Lưu ra output_path (mặc định ghi đè/cập nhật chính excel_path).
     """
     if output_path is None:
         output_path = excel_path
 
-    # 1. Đọc file TQ nguồn
-    wb_tq = openpyxl.load_workbook(tq_excel_path, data_only=True)
+    # 1. Đọc file TQ công ty (tùy chọn nếu chỉ đối chiếu TQ_NTNN)
     ws_tq_src = None
-    for cand in wb_tq.sheetnames:
-        if cand.strip().upper() in ("TQ", "TONG QUAN", "TỔNG QUAN"):
-            ws_tq_src = wb_tq[cand]
-            break
-    if ws_tq_src is None:
-        ws_tq_src = wb_tq[wb_tq.sheetnames[0]]
+    all_tq_rows: List[Dict[str, Any]] = []
+    if tq_excel_path and os.path.isfile(tq_excel_path):
+        wb_tq = openpyxl.load_workbook(tq_excel_path, data_only=True)
+        for cand in wb_tq.sheetnames:
+            if cand.strip().upper() in ("TQ", "TONG QUAN", "TỔNG QUAN"):
+                ws_tq_src = wb_tq[cand]
+                break
+        if ws_tq_src is None:
+            ws_tq_src = wb_tq[wb_tq.sheetnames[0]]
+        all_tq_rows = parse_tq_rows(ws_tq_src)
 
-    all_tq_rows = parse_tq_rows(ws_tq_src)
-    if not all_tq_rows:
-        raise ValueError("Không tìm thấy dữ liệu giao dịch hợp lệ trong file Sổ Tổng Quan (TQ).")
+    # 1b. Đọc file TQ Nhà Thầu (tùy chọn nếu đơn vị không có Thuế nhà thầu)
+    ws_ntnn_src = None
+    all_ntnn_rows: List[Dict[str, Any]] = []
+    if tq_ntnn_excel_path and os.path.isfile(tq_ntnn_excel_path):
+        wb_ntnn = openpyxl.load_workbook(tq_ntnn_excel_path, data_only=True)
+        for cand in wb_ntnn.sheetnames:
+            if cand.strip().upper() in ("TQ", "TQ_NTNN", "TONG QUAN", "TỔNG QUAN", "NTNN"):
+                ws_ntnn_src = wb_ntnn[cand]
+                break
+        if ws_ntnn_src is None:
+            ws_ntnn_src = wb_ntnn[wb_ntnn.sheetnames[0]]
+        all_ntnn_rows = parse_tq_rows(ws_ntnn_src)
 
+    if not all_tq_rows and not all_ntnn_rows:
+        raise ValueError("Không tìm thấy dữ liệu giao dịch hợp lệ trong Sổ Tổng Quan (TQ hoặc TQ_NTNN).")
+
+    has_main_tq = bool(all_tq_rows)
     norm_cqt = _normalize_cqt(target_cqt)
     tq_rows, other_tq_rows = split_tq_rows_by_cqt(all_tq_rows, norm_cqt)
     other_cqt_entries: List[Tuple[str, Dict[str, Any]]] = [("TQ", r) for r in other_tq_rows]
@@ -831,7 +847,7 @@ def integrate_tq_and_qhns_into_workbook(
     elif detected_years:
         years = detected_years
     else:
-        src_for_yr = tq_rows if tq_rows else all_tq_rows
+        src_for_yr = tq_rows or all_tq_rows or all_ntnn_rows
         ht_years = sorted({x["ht_year"] for x in src_for_yr if 2015 <= x["ht_year"] <= 2035})
         years = ht_years[-6:] if len(ht_years) > 6 else ht_years
 
@@ -855,25 +871,16 @@ def integrate_tq_and_qhns_into_workbook(
                 signed_v = val
             tncn_pp_other_by_ky[item["ky_year"]] += signed_v
 
-    # 2b. Đọc Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) nếu người dùng cung cấp
+    # 2b. Tính chỉ số Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) nếu có
     ntnn_metrics: Optional[Dict[str, Any]] = None
-    ws_ntnn_src = None
-    if tq_ntnn_excel_path and os.path.isfile(tq_ntnn_excel_path):
-        wb_ntnn = openpyxl.load_workbook(tq_ntnn_excel_path, data_only=True)
-        for cand in wb_ntnn.sheetnames:
-            if cand.strip().upper() in ("TQ", "TQ_NTNN", "TONG QUAN", "TỔNG QUAN", "NTNN"):
-                ws_ntnn_src = wb_ntnn[cand]
-                break
-        if ws_ntnn_src is None:
-            ws_ntnn_src = wb_ntnn[wb_ntnn.sheetnames[0]]
-        all_ntnn_rows = parse_tq_rows(ws_ntnn_src)
-        if all_ntnn_rows:
-            ntnn_rows, other_ntnn_rows = split_tq_rows_by_cqt(all_ntnn_rows, norm_cqt)
-            other_cqt_entries.extend([("TQ_NTNN", r) for r in other_ntnn_rows])
-            ntnn_metrics = compute_tq_metrics(ntnn_rows, start_year, end_year)
+    if all_ntnn_rows:
+        ntnn_rows, other_ntnn_rows = split_tq_rows_by_cqt(all_ntnn_rows, norm_cqt)
+        other_cqt_entries.extend([("TQ_NTNN", r) for r in other_ntnn_rows])
+        ntnn_metrics = compute_tq_metrics(ntnn_rows, start_year, end_year)
 
     # 3. Chép sheet TQ (và TQ_NTNN nếu có) vào workbook đích
-    _copy_tq_sheet(wb, ws_tq_src, sheet_name="TQ")
+    if ws_tq_src is not None and has_main_tq:
+        _copy_tq_sheet(wb, ws_tq_src, sheet_name="TQ")
     if ws_ntnn_src is not None and ntnn_metrics is not None:
         _copy_tq_sheet(wb, ws_ntnn_src, sheet_name="TQ_NTNN")
 
@@ -901,81 +908,86 @@ def integrate_tq_and_qhns_into_workbook(
             continue
         ws_y = wb[sname]
 
-        # --- Dòng 23: Thuế GTGT phải nộp trong kỳ ---
-        f23_val = round(metrics["gtgt_tk_by_ky"][y])
-        c23_val = round(decl_vals[y]["gtgt_c23"])
-        diff_gtgt = c23_val - f23_val
+        # --- Dòng 23, 76, 90: Chỉ đối chiếu khi có Sổ Tổng Quan công ty (TQ) ---
+        if has_main_tq:
+            f23_val = round(metrics["gtgt_tk_by_ky"][y])
+            c23_val = round(decl_vals[y]["gtgt_c23"])
+            diff_gtgt = c23_val - f23_val
 
-        ws_y["F23"].value = f23_val
-        ws_y["F23"].number_format = num_fmt
-        ws_y["F23"].font = font_bold
-        ws_y["G23"].value = "=C23-F23"
-        ws_y["G23"].number_format = num_fmt
-        ws_y["G23"].font = font_bold
+            ws_y["F23"].value = f23_val
+            ws_y["F23"].number_format = num_fmt
+            ws_y["F23"].font = font_bold
+            ws_y["G23"].value = "=C23-F23"
+            ws_y["G23"].number_format = num_fmt
+            ws_y["G23"].font = font_bold
 
-        if diff_gtgt > 1000:
-            missing_p = sorted(metrics["gtgt_c2_periods"][y] - metrics["gtgt_tk_periods"][y])
-            miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
-            ws_y["F23"].comment = Comment(f"Phát sinh TK trên tổng quan rà soát thiếu TK {miss_str}", "QHNS")
-            gtgt_missing_info[y] = miss_str
-            alerts.append(f"Năm {y} - Thuế GTGT: Tờ khai ({c23_val:,.0f}) > Tổng quan ({f23_val:,.0f}), chênh lệch {diff_gtgt:,.0f} (thiếu TK {miss_str}).")
+            if diff_gtgt > 1000:
+                missing_p = sorted(metrics["gtgt_c2_periods"][y] - metrics["gtgt_tk_periods"][y])
+                miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
+                ws_y["F23"].comment = Comment(f"Phát sinh TK trên tổng quan rà soát thiếu TK {miss_str}", "QHNS")
+                gtgt_missing_info[y] = miss_str
+                alerts.append(f"Năm {y} - Thuế GTGT: Tờ khai ({c23_val:,.0f}) > Tổng quan ({f23_val:,.0f}), chênh lệch {diff_gtgt:,.0f} (thiếu TK {miss_str}).")
+            else:
+                ws_y["F23"].comment = Comment("Phát sinh TK trên tổng quan", "QHNS")
+                gtgt_missing_info[y] = None
+
+            # --- Dòng 76: Thuế TNDN phải nộp trong kỳ ---
+            f76_val = round(metrics["tndn_tk_qt_by_ky"][y])
+            c76_val = round(decl_vals[y]["tndn_c76"])
+            diff_tndn = c76_val - f76_val
+
+            ws_y["F76"].value = f76_val
+            ws_y["F76"].number_format = num_fmt
+            ws_y["F76"].font = font_bold
+            ws_y["G76"].value = "=C76-F76"
+            ws_y["G76"].number_format = num_fmt
+            ws_y["G76"].font = font_bold
+
+            if diff_tndn > 1000:
+                ws_y["F76"].comment = Comment(f"Phát sinh TK; TQ; QT trên tổng quan (chênh lệch {diff_tndn:,.0f} so với tờ khai TNDN)", "QHNS")
+                tndn_missing_info[y] = f"TNDN {y}"
+                alerts.append(f"Năm {y} - Thuế TNDN: Tờ khai ({c76_val:,.0f}) > Tổng quan ({f76_val:,.0f}), chênh lệch {diff_tndn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra.")
+            else:
+                ws_y["F76"].comment = Comment("Phát sinh TK; TQ; QT trên tổng quan", "QHNS")
+                tndn_missing_info[y] = None
+
+            # --- Dòng 90: Tổng hợp tổng số thuế TNCN phải khấu trừ ---
+            f90_main_val = round(metrics["tncn_tk_th_tq_by_ky"][y])
+            pp_other_val = round(tncn_pp_other_by_ky[y])
+            f90_val = f90_main_val + pp_other_val
+            c90_val = round(decl_vals[y]["tncn_c90"])
+
+            # Nếu năm cuối (VD 2025) chưa có tờ khai Quyết toán 05/QTT-TNCN (C90 = 0) mà TQ có phát sinh -> lấy F90 vào C90
+            if c90_val == 0 and f90_val > 0:
+                ws_y["C90"].value = f90_val
+                ws_y["C90"].number_format = num_fmt
+                c90_val = f90_val
+
+            diff_tncn = c90_val - f90_val
+            ws_y["F90"].value = f90_val
+            ws_y["F90"].number_format = num_fmt
+            ws_y["F90"].font = font_bold
+            ws_y["G90"].value = "=C90-F90"
+            ws_y["G90"].number_format = num_fmt
+            ws_y["G90"].font = font_bold
+
+            pp_note = (
+                f" (CQT {norm_cqt or 'chính'}: {f90_main_val:,.0f} + PP phân bổ CQT khác: {pp_other_val:,.0f})"
+                if pp_other_val != 0
+                else ""
+            )
+            if diff_tncn > 1000:
+                missing_p = sorted(metrics["tncn_c2_periods"][y] - metrics["tncn_tk_periods"][y])
+                miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
+                ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note} rà soát thiếu TK {miss_str}", "QHNS")
+                tncn_missing_info[y] = miss_str
+                alerts.append(f"Năm {y} - Thuế TNCN: Tờ khai QTT ({c90_val:,.0f}) > Tổng quan ({f90_val:,.0f}), chênh lệch {diff_tncn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra (thiếu TK {miss_str}).")
+            else:
+                ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note}", "QHNS")
+                tncn_missing_info[y] = None
         else:
-            ws_y["F23"].comment = Comment("Phát sinh TK trên tổng quan", "QHNS")
             gtgt_missing_info[y] = None
-
-        # --- Dòng 76: Thuế TNDN phải nộp trong kỳ ---
-        f76_val = round(metrics["tndn_tk_qt_by_ky"][y])
-        c76_val = round(decl_vals[y]["tndn_c76"])
-        diff_tndn = c76_val - f76_val
-
-        ws_y["F76"].value = f76_val
-        ws_y["F76"].number_format = num_fmt
-        ws_y["F76"].font = font_bold
-        ws_y["G76"].value = "=C76-F76"
-        ws_y["G76"].number_format = num_fmt
-        ws_y["G76"].font = font_bold
-
-        if diff_tndn > 1000:
-            ws_y["F76"].comment = Comment(f"Phát sinh TK; TQ; QT trên tổng quan (chênh lệch {diff_tndn:,.0f} so với tờ khai TNDN)", "QHNS")
-            tndn_missing_info[y] = f"TNDN {y}"
-            alerts.append(f"Năm {y} - Thuế TNDN: Tờ khai ({c76_val:,.0f}) > Tổng quan ({f76_val:,.0f}), chênh lệch {diff_tndn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra.")
-        else:
-            ws_y["F76"].comment = Comment("Phát sinh TK; TQ; QT trên tổng quan", "QHNS")
             tndn_missing_info[y] = None
-
-        # --- Dòng 90: Tổng hợp tổng số thuế TNCN phải khấu trừ ---
-        f90_main_val = round(metrics["tncn_tk_th_tq_by_ky"][y])
-        pp_other_val = round(tncn_pp_other_by_ky[y])
-        f90_val = f90_main_val + pp_other_val
-        c90_val = round(decl_vals[y]["tncn_c90"])
-
-        # Nếu năm cuối (VD 2025) chưa có tờ khai Quyết toán 05/QTT-TNCN (C90 = 0) mà TQ có phát sinh -> lấy F90 vào C90
-        if c90_val == 0 and f90_val > 0:
-            ws_y["C90"].value = f90_val
-            ws_y["C90"].number_format = num_fmt
-            c90_val = f90_val
-
-        diff_tncn = c90_val - f90_val
-        ws_y["F90"].value = f90_val
-        ws_y["F90"].number_format = num_fmt
-        ws_y["F90"].font = font_bold
-        ws_y["G90"].value = "=C90-F90"
-        ws_y["G90"].number_format = num_fmt
-        ws_y["G90"].font = font_bold
-
-        pp_note = (
-            f" (CQT {norm_cqt or 'chính'}: {f90_main_val:,.0f} + PP phân bổ CQT khác: {pp_other_val:,.0f})"
-            if pp_other_val != 0
-            else ""
-        )
-        if diff_tncn > 1000:
-            missing_p = sorted(metrics["tncn_c2_periods"][y] - metrics["tncn_tk_periods"][y])
-            miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
-            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note} rà soát thiếu TK {miss_str}", "QHNS")
-            tncn_missing_info[y] = miss_str
-            alerts.append(f"Năm {y} - Thuế TNCN: Tờ khai QTT ({c90_val:,.0f}) > Tổng quan ({f90_val:,.0f}), chênh lệch {diff_tncn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra (thiếu TK {miss_str}).")
-        else:
-            ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note}", "QHNS")
             tncn_missing_info[y] = None
 
         ws_y.column_dimensions["F"].width = 18
@@ -1557,13 +1569,14 @@ def integrate_tq_and_qhns_into_workbook(
         cell.fill = header_fill
     ws_dc.row_dimensions[2].height = 34
 
-    other_tms = metrics.get("other_tms", [])
+    other_tms = metrics.get("other_tms", []) if has_main_tq else []
     ntnn_other_tms = ntnn_metrics.get("other_tms", []) if ntnn_metrics is not None else []
+    main_core_count = 4 if has_main_tq else 0
     ntnn_core_count = 2 if ntnn_metrics is not None else 0
 
     # Xây dựng Bảng 2 trước trong bộ nhớ vị trí để Bảng 1 có thể link trực tiếp sang số dư năm cuối của các tiểu mục khác
     b1_start_row = 3
-    b1_core_count = 4 + ntnn_core_count
+    b1_core_count = main_core_count + ntnn_core_count
     b1_total_rows = b1_core_count + len(other_tms) + len(ntnn_other_tms)
     b1_sum_row = b1_start_row + b1_total_rows
     b2_title_row = b1_sum_row + 2
@@ -1596,13 +1609,16 @@ def integrate_tq_and_qhns_into_workbook(
         cell.fill = header_fill
     ws_dc.row_dimensions[b2_header_row].height = 30
 
-    b2_rows_spec: List[Tuple[str, str, str, Dict[int, float], Dict[int, float], float]] = [
-        ("1701", "1", "Thuế GTGT (1701)", metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], metrics["opening_exact"]["1701"]),
-        ("1052", "2", "Thuế TNDN (1052)", metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], metrics["opening_exact"]["1052"]),
-        ("1001", "3", "Thuế TNCN (1001)", metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], metrics["opening_exact"]["1001"]),
-        ("LPMB", "4", "Lệ phí môn bài (2862/2863/2864)", metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], metrics["opening_exact"]["LPMB"]),
-    ]
-    next_stt = 5
+    b2_rows_spec: List[Tuple[str, str, str, Dict[int, float], Dict[int, float], float]] = []
+    next_stt = 1
+    if has_main_tq:
+        b2_rows_spec.extend([
+            ("1701", "1", "Thuế GTGT (1701)", metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], metrics["opening_exact"]["1701"]),
+            ("1052", "2", "Thuế TNDN (1052)", metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], metrics["opening_exact"]["1052"]),
+            ("1001", "3", "Thuế TNCN (1001)", metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], metrics["opening_exact"]["1001"]),
+            ("LPMB", "4", "Lệ phí môn bài (2862/2863/2864)", metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], metrics["opening_exact"]["LPMB"]),
+        ])
+        next_stt = 5
     if ntnn_metrics is not None:
         b2_rows_spec.append(
             ("NT_1701", str(next_stt), "Thuế GTGT Nhà thầu (1701 - TQ_NTNN)", ntnn_metrics["gtgt_tk_by_ky"], ntnn_metrics["gtgt_c2_by_ht"], ntnn_metrics["opening_exact"]["1701"])
@@ -1659,12 +1675,14 @@ def integrate_tq_and_qhns_into_workbook(
             dc_last_year_rows = dc_this
 
     # --- ĐIỀN BẢNG 1: TỔNG HỢP ĐỐI CHIẾU CUỐI KỲ TẤT CẢ SẮC THUẾ (BIÊN BẢN QHNS <-> THỰC TẾ SỔ TQ & TQ_NTNN) ---
-    dc_specs = [
-        ("Thuế GTGT", "1701", "1701", last_rows.get("gtgt"), gtgt_e_cells, metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], metrics["opening_exact"]["1701"], True),
-        ("Thuế TNDN", "1052", "1052", last_rows.get("tndn"), tndn_e_cells, metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], metrics["opening_exact"]["1052"], True),
-        ("Thuế TNCN", "1001", "1001", last_rows.get("tncn"), tncn_e_cells, metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], metrics["opening_exact"]["1001"], True),
-        ("Lệ phí môn bài", "LPMB", "2862/2863/2864", last_rows.get("lpmb"), [], metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], metrics["opening_exact"]["LPMB"], True),
-    ]
+    dc_specs = []
+    if has_main_tq:
+        dc_specs.extend([
+            ("Thuế GTGT", "1701", "1701", last_rows.get("gtgt"), gtgt_e_cells, metrics["gtgt_tk_by_ky"], metrics["gtgt_c2_by_ht"], metrics["opening_exact"]["1701"], True),
+            ("Thuế TNDN", "1052", "1052", last_rows.get("tndn"), tndn_e_cells, metrics["tndn_tk_qt_by_ky"], metrics["tndn_c2_by_ht"], metrics["opening_exact"]["1052"], True),
+            ("Thuế TNCN", "1001", "1001", last_rows.get("tncn"), tncn_e_cells, metrics["tncn_tk_th_tq_by_ky"], metrics["tncn_c2_by_ht"], metrics["opening_exact"]["1001"], True),
+            ("Lệ phí môn bài", "LPMB", "2862/2863/2864", last_rows.get("lpmb"), [], metrics["lpmb_ps_by_ky"], metrics["lpmb_c2_by_ht"], metrics["opening_exact"]["LPMB"], True),
+        ])
     if ntnn_metrics is not None:
         dc_specs.append(
             ("Thuế GTGT Nhà thầu (TQ_NTNN)", "NT_1701", "1701 (NTNN)", last_rows.get("nt_gtgt"), ntg_e_cells, ntnn_metrics["gtgt_tk_by_ky"], ntnn_metrics["gtgt_c2_by_ht"], ntnn_metrics["opening_exact"]["1701"], True)

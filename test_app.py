@@ -1277,6 +1277,46 @@ class TestTaxXmlToExcel(unittest.TestCase):
             # 4. TQ_CQT_Khac vẫn tách riêng 20tr PP và 20tr C2 tại 0101
             self.assertIn("TQ_CQT_Khac", wb_out.sheetnames)
 
+    def test_v16_qhns_single_tq_ntnn_only(self) -> None:
+        """Kiểm thử v1.6: Có cái nào đối chiếu cái đó — chạy chỉ với TQ_NTNN (không cần TQ công ty) vẫn ra QHNS & DoiChieu_QHNS chuẩn."""
+        import datetime
+        from qhns_summarizer import integrate_tq_and_qhns_into_workbook
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wb_decl = openpyxl.Workbook()
+            ws24 = wb_decl.active
+            ws24.title = "2024"
+            ws24["C97"] = 5_000_000
+            ws24["C98"] = 4_000_000
+            decl_path = os.path.join(tmpdir, "decl_ntnn_only.xlsx")
+            wb_decl.save(decl_path)
+
+            wb_nt = openpyxl.Workbook()
+            ws_nt = wb_nt.active
+            ws_nt.title = "TQ"
+            ws_nt.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            ws_nt.append(["7901", "2406", "1", "TK", "1701", "VND", 5_000_000, datetime.datetime(2024, 6, 15)])
+            ws_nt.append(["7901", "2406", "2", "C2", "1701", "VND", -5_000_000, datetime.datetime(2024, 6, 20)])
+            ws_nt.append(["7901", "2406", "3", "TK", "1052", "VND", 4_000_000, datetime.datetime(2024, 6, 15)])
+            ws_nt.append(["7901", "2406", "4", "C2", "1052", "VND", -4_000_000, datetime.datetime(2024, 6, 20)])
+            nt_path = os.path.join(tmpdir, "tq_ntnn_only.xlsx")
+            wb_nt.save(nt_path)
+
+            out_path = os.path.join(tmpdir, "out_ntnn_only.xlsx")
+            res = integrate_tq_and_qhns_into_workbook(
+                decl_path, None, year_from=2024, year_to=2024, output_path=out_path, tq_ntnn_excel_path=nt_path
+            )
+            self.assertEqual(res["alerts"], [])
+            wb_out = openpyxl.load_workbook(out_path, data_only=False)
+            self.assertIn("TQ_NTNN", wb_out.sheetnames)
+            self.assertNotIn("TQ", wb_out.sheetnames)
+            self.assertIn("QHNS", wb_out.sheetnames)
+            self.assertIn("DoiChieu_QHNS", wb_out.sheetnames)
+            self.assertEqual(wb_out["2024"]["F97"].value, 5_000_000)
+            self.assertEqual(wb_out["2024"]["F98"].value, 4_000_000)
+            self.assertEqual(wb_out["QHNS"]["D10"].value, "='2024'!C97")
+            self.assertEqual(wb_out["QHNS"]["F10"].value, 5_000_000)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,7 +90,7 @@ class TaxXmlToExcelApp:
         # Khung chọn Sổ Tổng Quan (TQ) tùy chọn để đối chiếu & lên tự động biểu QHNS
         tq_frame = ttk.LabelFrame(
             self.root,
-            text="1c. Sổ Tổng Quan (TQ - Tùy chọn: nếu chọn sẽ tự động đối chiếu F/G trên từng năm & xuất biểu QHNS)",
+            text="1c. Sổ Tổng Quan Công ty (TQ - Tùy chọn: chỉ cần chọn 1c nếu đơn vị không có Nhà thầu)",
             padding=(10, 6),
         )
         tq_frame.pack(fill=tk.X, padx=12, pady=4)
@@ -105,7 +105,7 @@ class TaxXmlToExcelApp:
         # Khung chọn Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) tùy chọn để đối chiếu & lên tự động mục Thuế nhà thầu trên QHNS
         ntnn_frame = ttk.LabelFrame(
             self.root,
-            text="1d. Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN - Tùy chọn: nếu chọn sẽ tự động đối chiếu F97/F98 & lên mục Thuế nhà thầu trên QHNS)",
+            text="1d. Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN - Tùy chọn: KHÔNG bắt buộc, chỉ chọn khi đơn vị có Thuế nhà thầu)",
             padding=(10, 6),
         )
         ntnn_frame.pack(fill=tk.X, padx=12, pady=4)
@@ -552,6 +552,7 @@ class TaxXmlToExcelApp:
         layout_mode = self.var_layout.get()
         tq_path = self.var_tq_path.get().strip()
         tq_ntnn_path = self.var_tq_ntnn_path.get().strip()
+        valid_tq = tq_path if (tq_path and os.path.isfile(tq_path)) else None
         valid_ntnn = tq_ntnn_path if (tq_ntnn_path and os.path.isfile(tq_ntnn_path)) else None
         y_from, y_to = self._get_year_bounds()
         cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
@@ -577,11 +578,11 @@ class TaxXmlToExcelApp:
 
                 qhns_alerts: List[str] = []
                 qhns_done = False
-                if tq_path and os.path.isfile(tq_path) and created and not split_files and not split_years:
+                if (valid_tq or valid_ntnn) and created and not split_files and not split_years:
                     self.root.after(0, lambda: self.lbl_status.config(text="Đang đối chiếu TQ & lên QHNS..."))
                     qhns_res = integrate_tq_and_qhns_into_workbook(
                         created[0],
-                        tq_path,
+                        valid_tq,
                         year_from=y_from,
                         year_to=y_to,
                         output_path=created[0],
@@ -636,17 +637,18 @@ class TaxXmlToExcelApp:
             return
 
         tq_path = self.var_tq_path.get().strip()
-        if not tq_path or not os.path.isfile(tq_path):
-            tq_path = filedialog.askopenfilename(
-                title="Bước 2/2: Chọn file Excel Sổ Tổng Quan (TQ) tải từ TMS",
+        tq_ntnn_path = self.var_tq_ntnn_path.get().strip()
+        valid_tq = tq_path if (tq_path and os.path.isfile(tq_path)) else None
+        valid_ntnn = tq_ntnn_path if (tq_ntnn_path and os.path.isfile(tq_ntnn_path)) else None
+        if not valid_tq and not valid_ntnn:
+            picked_tq = filedialog.askopenfilename(
+                title="Bước 2/2: Chọn file Excel Sổ Tổng Quan (TQ hoặc TQ_NTNN) tải từ TMS",
                 filetypes=[("Excel Workbook", "*.xlsx"), ("All files", "*.*")],
             )
-            if not tq_path:
+            if not picked_tq:
                 return
-            self.var_tq_path.set(os.path.normpath(tq_path))
-
-        tq_ntnn_path = self.var_tq_ntnn_path.get().strip()
-        valid_ntnn = tq_ntnn_path if (tq_ntnn_path and os.path.isfile(tq_ntnn_path)) else None
+            self.var_tq_path.set(os.path.normpath(picked_tq))
+            valid_tq = os.path.normpath(picked_tq)
 
         y_from, y_to = self._get_year_bounds()
         open_after = self.var_open_after.get()
@@ -663,7 +665,7 @@ class TaxXmlToExcelApp:
             try:
                 res = integrate_tq_and_qhns_into_workbook(
                     excel_path,
-                    tq_path,
+                    valid_tq,
                     year_from=y_from,
                     year_to=y_to,
                     output_path=excel_path,
