@@ -1177,6 +1177,58 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_q["E10"].value, "='2024'!G97")
             self.assertEqual(ws_q["D11"].value, "='2024'!C98")
 
+    def test_v16_qhns_cqt_filter_and_other_cqt_separation(self) -> None:
+        """Kiểm thử v1.6: Lọc đúng Mã CQT quản lý (VD 7901 hoặc CQT tùy chọn) vào QHNS và tách riêng số nộp/phát sinh tại các CQT khác sang sheet TQ_CQT_Khac."""
+        import datetime
+        from qhns_summarizer import integrate_tq_and_qhns_into_workbook
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wb_decl = openpyxl.Workbook()
+            ws24 = wb_decl.active
+            ws24.title = "2024"
+            ws24["C23"] = 10_000_000
+            ws24["C76"] = 0
+            ws24["C90"] = 0
+            decl_path = os.path.join(tmpdir, "decl_cqt.xlsx")
+            wb_decl.save(decl_path)
+
+            wb_tq = openpyxl.Workbook()
+            ws_tq = wb_tq.active
+            ws_tq.title = "TQ"
+            ws_tq.append(["Cơ quan thuế", "Kỳ báo cáo", "Số hệ thống", "Ký hiệu giao dịch", "Tiểu mục", "Loại tiền", "Số tiền", "Ngày hạch toán"])
+            # Giao dịch thuộc đúng CQT quản lý 7901 (phải vào QHNS)
+            ws_tq.append(["7901", "2401", "1", "TK", "1701", "VND", 10_000_000, datetime.datetime(2024, 2, 20)])
+            ws_tq.append(["7901", "2401", "2", "C2", "1701", "VND", -10_000_000, datetime.datetime(2024, 2, 22)])
+            # Giao dịch thuộc CQT khác (VD 0101 Hà Nội & 7401 Bình Dương -> phải tách sang TQ_CQT_Khac, KHÔNG gộp vào QHNS 7901!)
+            ws_tq.append(["0101", "2403", "3", "TK", "1701", "VND", 4_000_000, datetime.datetime(2024, 4, 15)])
+            ws_tq.append(["0101", "2403", "4", "C2", "1701", "VND", -4_000_000, datetime.datetime(2024, 4, 18)])
+            ws_tq.append(["7401", "24CN", "5", "C2", "2864", "VND", -1_000_000, datetime.datetime(2024, 1, 25)])
+            tq_path = os.path.join(tmpdir, "tq_multi_cqt.xlsx")
+            wb_tq.save(tq_path)
+
+            out_path = os.path.join(tmpdir, "out_cqt.xlsx")
+            res = integrate_tq_and_qhns_into_workbook(
+                decl_path, tq_path, year_from=2024, year_to=2024, output_path=out_path, target_cqt="7901"
+            )
+
+            self.assertEqual(res["target_cqt"], "7901")
+            self.assertEqual(res["other_cqt_count"], 3)
+            self.assertTrue(any("TQ_CQT_Khac" in a for a in res["alerts"]))
+
+            wb_out = openpyxl.load_workbook(out_path, data_only=False)
+            self.assertIn("TQ_CQT_Khac", wb_out.sheetnames)
+            # F23 trên sheet 2024 & F5 (Số đã nộp GTGT) trên QHNS CHỈ lấy đúng 10,000,000 của CQT 7901 (không cộng 4,000,000 của 0101)
+            self.assertEqual(wb_out["2024"]["F23"].value, 10_000_000)
+            self.assertEqual(wb_out["QHNS"]["F5"].value, 10_000_000)
+            # LPMB trên QHNS không cộng nhầm 1,000,000 của CQT 7401
+            self.assertEqual(wb_out["QHNS"]["F12"].value, 0)
+
+            # Kiểm tra sheet TQ_CQT_Khac tách đủ cả 0101 (4tr) và 7401 (1tr)
+            ws_other = wb_out["TQ_CQT_Khac"]
+            cqt_codes_b1 = [str(ws_other.cell(r, 3).value or "") for r in range(3, 8)]
+            self.assertIn("0101", cqt_codes_b1)
+            self.assertIn("7401", cqt_codes_b1)
+
 
 if __name__ == "__main__":
     unittest.main()

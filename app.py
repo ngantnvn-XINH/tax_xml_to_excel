@@ -218,6 +218,19 @@ class TaxXmlToExcelApp:
         self.ent_cutoff_date = ttk.Entry(row_opt3, textvariable=self.var_cutoff_date, width=12)
         self.ent_cutoff_date.pack(side=tk.LEFT, padx=(0, 6))
 
+        ttk.Separator(row_opt3, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        ttk.Label(row_opt3, text="Mã CQT quản lý (QHNS):").pack(side=tk.LEFT, padx=(0, 4))
+        self.var_target_cqt = tk.StringVar(value="7901")
+        self.ent_target_cqt = ttk.Entry(row_opt3, textvariable=self.var_target_cqt, width=8)
+        self.ent_target_cqt.pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(
+            row_opt3,
+            text="(VD: 7901; để trống = lấy tất cả CQT)",
+            font=("Segoe UI", 8, "italic"),
+            foreground="#555555",
+        ).pack(side=tk.LEFT)
+
         # Bảng xem trước dữ liệu
         table_frame = ttk.Frame(self.root, padding=(12, 4, 12, 4))
         table_frame.pack(fill=tk.BOTH, expand=True)
@@ -542,6 +555,7 @@ class TaxXmlToExcelApp:
         valid_ntnn = tq_ntnn_path if (tq_ntnn_path and os.path.isfile(tq_ntnn_path)) else None
         y_from, y_to = self._get_year_bounds()
         cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
+        target_cqt = self.var_target_cqt.get().strip() or None
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
@@ -573,6 +587,7 @@ class TaxXmlToExcelApp:
                         output_path=created[0],
                         cutoff_date=cutoff_dt,
                         tq_ntnn_excel_path=valid_ntnn,
+                        target_cqt=target_cqt,
                     )
                     qhns_alerts = qhns_res.get("alerts", [])
                     qhns_done = True
@@ -636,6 +651,7 @@ class TaxXmlToExcelApp:
         y_from, y_to = self._get_year_bounds()
         open_after = self.var_open_after.get()
         cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
+        target_cqt = self.var_target_cqt.get().strip() or None
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
@@ -653,6 +669,7 @@ class TaxXmlToExcelApp:
                     output_path=excel_path,
                     cutoff_date=cutoff_dt,
                     tq_ntnn_excel_path=valid_ntnn,
+                    target_cqt=target_cqt,
                 )
 
                 def on_done() -> None:

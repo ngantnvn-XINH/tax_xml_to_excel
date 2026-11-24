@@ -3,6 +3,9 @@
 Công cụ ETL (Extract – Transform – Load) chuyên dụng giúp đọc, làm sạch, chuẩn hóa và tổng hợp **100% dữ liệu từ hồ sơ khai thuế XML (HTKK / eTax)** sang file Excel chuẩn mẫu kế toán - thanh tra, kiểm tra thuế.
 
 ## Tính năng nổi bật (Phiên bản v1.6)
+- **Lọc đúng Mã Cơ quan thuế quản lý khi lên QHNS & tách riêng CQT khác (`TQ_CQT_Khac`):**
+  - Cho phép nhập trực tiếp **`Mã CQT quản lý (QHNS)`** trên giao diện `app.py` (mặc định `7901`, có thể đổi sang bất kỳ mã CQT nào như `7903`, `0101`... hoặc để trống nếu lấy tất cả).
+  - Biểu `QHNS`, đối chiếu `F/G` trên từng năm và `DoiChieu_QHNS` chỉ lấy đúng số liệu của CQT quản lý đã nhập; toàn bộ phát sinh/đã nộp tại các CQT khác tự động tách riêng sang sheet **`TQ_CQT_Khac`** (gồm Bảng 1 tổng hợp theo Mã CQT × Năm × Tiểu mục và Bảng 2 chi tiết từng dòng giao dịch).
 - **Tổng hợp & Đối chiếu trọn bộ Tờ khai Thuế Nhà Thầu Nước Ngoài (`01/NTNN`) riêng biệt:**
   - **Khu vực chọn riêng trên giao diện (`1b. Tờ khai Thuế Nhà Thầu XML`):** Tách riêng nút chọn nhiều file / thư mục XML Nhà thầu (MST nộp thay riêng) để không lẫn với MST công ty chính, kèm bộ lọc `Nhà thầu (NTNN)`.
   - **Tự động nhận diện chuẩn mẫu theo từng thời kỳ (tuyệt đối không lệch cột):** Phân biệt chính xác mẫu **TT 103/2014** (`ct6..ct13`: `ct6`=DT GTGT, `ct7`=Tỷ lệ GTGT, `ct8`=Thuế GTGT, `ct9`=DT TNDN, `ct12`=Thuế TNDN, `ct13`=Tổng thuế) và mẫu **TT 80/2021** (`ct6`=Ngày thanh toán, `ct7`=DT GTGT, `ct9`=Thuế GTGT, `ct10`=DT TNDN, `ct13`=Thuế TNDN, `ct14`=Tổng thuế), cũng như các thẻ ngữ nghĩa trực tiếp.

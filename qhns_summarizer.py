@@ -67,6 +67,44 @@ def _norm_header(val: Any) -> str:
     return re.sub(r"\s+", " ", s)
 
 
+def _normalize_cqt(val: Any) -> str:
+    """Chuẩn hóa mã Cơ quan thuế (VD: 7901, 7901.0, '7901 - Cục Thuế...' -> '7901')."""
+    if val is None:
+        return ""
+    if isinstance(val, (int, float)):
+        if float(val).is_integer():
+            return str(int(val))
+        return str(val).strip()
+    s = str(val).strip()
+    if not s:
+        return ""
+    m = re.match(r"^(\d{3,6})\b", s)
+    if m:
+        return m.group(1)
+    return s.upper()
+
+
+def split_tq_rows_by_cqt(
+    tq_rows: List[Dict[str, Any]],
+    target_cqt: Optional[str] = "7901",
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Tách dữ liệu Sổ Tổng Quan (TQ) theo Mã Cơ quan thuế quản lý (mặc định '7901'):
+    - main_rows: Các giao dịch thuộc đúng CQT quản lý (đưa vào QHNS & đối chiếu F/G).
+    - other_rows: Các giao dịch thuộc CQT khác (tách riêng sang sheet TQ_CQT_Khac).
+    Nếu file nguồn không có thông tin cột CQT hoặc target_cqt để trống -> giữ toàn bộ vào main_rows.
+    """
+    tgt = _normalize_cqt(target_cqt)
+    if not tgt:
+        return list(tq_rows), []
+    has_cqt_info = any(bool(r.get("cqt")) for r in tq_rows)
+    if not has_cqt_info:
+        return list(tq_rows), []
+    main_rows = [r for r in tq_rows if r.get("cqt") == tgt]
+    other_rows = [r for r in tq_rows if r.get("cqt") != tgt]
+    return main_rows, other_rows
+
+
 def detect_tq_layout(ws_tq) -> Tuple[int, Dict[str, int]]:
     """
     Tự động nhận diện dòng tiêu đề và chỉ số cột (1-based) của sheet Sổ Tổng Quan (TQ).
@@ -79,7 +117,9 @@ def detect_tq_layout(ws_tq) -> Tuple[int, Dict[str, int]]:
             h = _norm_header(ws_tq.cell(r, c).value)
             if not h:
                 continue
-            if "kỳ báo cáo" in h or "ky bao cao" in h or "kỳ thuế" == h:
+            if "cơ quan thuế" in h or "co quan thue" in h or "mã cqt" in h or "ma cqt" in h or h == "cqt":
+                col_map.setdefault("cqt", c)
+            elif "kỳ báo cáo" in h or "ky bao cao" in h or "kỳ thuế" == h:
                 col_map.setdefault("ky", c)
             elif "ký hiệu giao dịch" in h or "ky hieu giao dich" in h or "loại giao dịch" in h or "loại gd" in h or "mã giao dịch" in h:
                 col_map.setdefault("gd", c)
@@ -95,11 +135,11 @@ def detect_tq_layout(ws_tq) -> Tuple[int, Dict[str, int]]:
             return r, col_map
 
     # Fallback mặc định theo file TMS chuẩn
-    return 1, {"ky": 2, "gd": 4, "tm": 5, "so_tien": 7, "ngay_ht": 10}
+    return 1, {"cqt": 1, "ky": 2, "gd": 4, "tm": 5, "so_tien": 7, "ngay_ht": 10}
 
 
 def parse_tq_rows(ws_tq) -> List[Dict[str, Any]]:
-    """Đọc toàn bộ các dòng giao dịch hợp lệ từ sheet TQ."""
+    """Đọc toàn bộ các dòng giao dịch hợp lệ từ sheet TQ (kèm Mã Cơ quan thuế)."""
     header_row, col_map = detect_tq_layout(ws_tq)
     rows: List[Dict[str, Any]] = []
     for r in range(header_row + 1, ws_tq.max_row + 1):
@@ -111,12 +151,20 @@ def parse_tq_rows(ws_tq) -> List[Dict[str, Any]]:
         no_co = ""
         if "no_co" in col_map:
             no_co = str(ws_tq.cell(r, col_map["no_co"]).value or "").strip().upper()
+        cqt_raw = ""
+        cqt_code = ""
+        if "cqt" in col_map:
+            raw_v = ws_tq.cell(r, col_map["cqt"]).value
+            cqt_raw = str(raw_v or "").strip()
+            cqt_code = _normalize_cqt(raw_v)
 
         if not isinstance(so_tien, (int, float)) or not ngay_ht or not gd or not tm:
             continue
 
         rows.append({
             "row": r,
+            "cqt": cqt_code,
+            "cqt_raw": cqt_raw,
             "ky": ky,
             "ky_year": extract_ky_year(ky, ngay_ht),
             "gd": gd,
@@ -522,6 +570,202 @@ def _eval_year_sheet_values(excel_path: str, years: List[int]) -> Dict[int, Dict
     return result
 
 
+def _write_other_cqt_sheet(
+    wb: openpyxl.Workbook,
+    other_entries: List[Tuple[str, Dict[str, Any]]],
+    target_cqt: str,
+) -> None:
+    """
+    Xuất riêng các giao dịch phát sinh / đã nộp tại Cơ quan thuế khác (không thuộc CQT quản lý chính, VD khác 7901)
+    ra sheet độc lập 'TQ_CQT_Khac' gồm:
+      - Bảng 1: Tổng hợp theo Nguồn (TQ / TQ_NTNN) × Mã CQT × Năm × Tiểu mục (Phát sinh, Đã nộp, Chênh lệch)
+      - Bảng 2: Chi tiết toàn bộ các dòng giao dịch tại các CQT khác để đối chiếu.
+    """
+    sname = "TQ_CQT_Khac"
+    if sname in wb.sheetnames:
+        del wb[sname]
+    if not other_entries:
+        return
+
+    ws = wb.create_sheet(sname)
+    thin = Side(style="thin", color="000000")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_fill = PatternFill("solid", fgColor="D9E1F2")
+    sum_fill = PatternFill("solid", fgColor="F2F2F2")
+    title_font = Font(name="Times New Roman", size=12, bold=True, color="1F4E78")
+    font_hdr = Font(name="Times New Roman", size=11, bold=True)
+    font_reg = Font(name="Times New Roman", size=11)
+    font_bold = Font(name="Times New Roman", size=11, bold=True)
+    al_c = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    al_l = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    al_r = Alignment(horizontal="right", vertical="center")
+    num_fmt = "#,##0"
+
+    ws["A1"] = f"BẢNG 1: TỔNG HỢP SỐ PHÁT SINH & SỐ ĐÃ NỘP TẠI CÁC CƠ QUAN THUẾ KHÁC (NGOÀI CQT {target_cqt})"
+    ws["A1"].font = title_font
+    ws.merge_cells("A1:J1")
+    ws.row_dimensions[1].height = 24
+
+    headers_b1 = [
+        "STT",
+        "Nguồn",
+        "Mã CQT",
+        "Cơ quan thuế (gốc)",
+        "Năm",
+        "Tiểu mục",
+        "Tên sắc thuế / Tiểu mục",
+        "Phát sinh phải nộp",
+        "Số đã nộp (C2/NT/HC/C5)",
+        "Chênh lệch\n(Phát sinh - Đã nộp)",
+    ]
+    for ci, h in enumerate(headers_b1, start=1):
+        c = ws.cell(2, ci, h)
+        c.font = font_hdr
+        c.alignment = al_c
+        c.border = border_all
+        c.fill = header_fill
+    ws.row_dimensions[2].height = 30
+
+    # Phát hiện quy ước dấu C2 của nhóm CQT khác
+    c2_vals = [item["so_tien"] for _, item in other_entries if item["gd"] == "C2" and item["so_tien"] != 0]
+    c2_is_neg = bool(c2_vals and sum(1 for v in c2_vals if v < 0) >= len(c2_vals) / 2)
+    payment_gds = ("C2", "HC", "NT", "C5")
+
+    summary: Dict[Tuple[str, str, str, int, str], Dict[str, float]] = {}
+    for src_name, item in other_entries:
+        if item["gd"] == "BT":
+            continue
+        yr = item.get("ht_year") or item.get("ky_year") or 0
+        key = (src_name, item.get("cqt") or "", item.get("cqt_raw") or item.get("cqt") or "", int(yr), item.get("tm") or "")
+        bucket = summary.setdefault(key, {"ps": 0.0, "nop": 0.0})
+        val = item["so_tien"]
+        no_co = item.get("no_co", "")
+        if item["gd"] in payment_gds:
+            if no_co in ("C", "N") and not c2_is_neg and val >= 0:
+                pay = val if no_co == "C" else -val
+            else:
+                pay = -val if c2_is_neg else val
+            bucket["nop"] += pay
+        else:
+            if no_co in ("C", "N") and not c2_is_neg and val >= 0:
+                ps = val if no_co == "N" else -val
+            else:
+                ps = val
+            bucket["ps"] += ps
+
+    cur_r = 3
+    b1_start = cur_r
+    for idx, (key, agg) in enumerate(sorted(summary.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][3], kv[0][4])), start=1):
+        src_name, cqt_code, cqt_raw, yr, tm = key
+        tm_name = TIEU_MUC_NAMES.get(tm, f"Tiểu mục {tm}")
+        row_vals = [
+            idx,
+            src_name,
+            cqt_code,
+            cqt_raw,
+            yr,
+            tm,
+            tm_name,
+            round(agg["ps"]),
+            round(agg["nop"]),
+            f"=H{cur_r}-I{cur_r}",
+        ]
+        for ci, v in enumerate(row_vals, start=1):
+            c = ws.cell(cur_r, ci, v)
+            c.font = font_bold if ci == 10 else font_reg
+            c.border = border_all
+            if ci in (3, 6):
+                c.number_format = "@"
+                c.alignment = al_c
+            elif ci in (1, 2, 5):
+                c.alignment = al_c
+            elif ci >= 8:
+                c.number_format = num_fmt
+                c.alignment = al_r
+            else:
+                c.alignment = al_l
+        cur_r += 1
+
+    b1_end = cur_r - 1
+    if b1_end >= b1_start:
+        ws.cell(cur_r, 2, "TỔNG CỘNG CQT KHÁC").alignment = al_l
+        ws.cell(cur_r, 8, f"=SUM(H{b1_start}:H{b1_end})")
+        ws.cell(cur_r, 9, f"=SUM(I{b1_start}:I{b1_end})")
+        ws.cell(cur_r, 10, f"=SUM(J{b1_start}:J{b1_end})")
+        for ci in range(1, 11):
+            c = ws.cell(cur_r, ci)
+            c.font = font_hdr
+            c.border = border_all
+            c.fill = sum_fill
+            if ci >= 8:
+                c.number_format = num_fmt
+                c.alignment = al_r
+        cur_r += 2
+
+    # Bảng 2: Chi tiết từng dòng giao dịch
+    ws.cell(cur_r, 1, f"BẢNG 2: CHI TIẾT TỪNG DÒNG GIAO DỊCH TẠI CÁC CQT KHÁC {target_cqt}").font = title_font
+    ws.merge_cells(start_row=cur_r, start_column=1, end_row=cur_r, end_column=10)
+    ws.row_dimensions[cur_r].height = 24
+    cur_r += 1
+
+    headers_b2 = [
+        "STT",
+        "Nguồn",
+        "Dòng trên TQ",
+        "Mã CQT",
+        "Cơ quan thuế (gốc)",
+        "Kỳ báo cáo",
+        "Ký hiệu GD",
+        "Tiểu mục",
+        "Số tiền",
+        "Ngày hạch toán",
+    ]
+    for ci, h in enumerate(headers_b2, start=1):
+        c = ws.cell(cur_r, ci, h)
+        c.font = font_hdr
+        c.alignment = al_c
+        c.border = border_all
+        c.fill = header_fill
+    ws.row_dimensions[cur_r].height = 26
+    cur_r += 1
+
+    for idx, (src_name, item) in enumerate(other_entries, start=1):
+        vals = [
+            idx,
+            src_name,
+            item.get("row", ""),
+            item.get("cqt", ""),
+            item.get("cqt_raw", ""),
+            item.get("ky", ""),
+            item.get("gd", ""),
+            item.get("tm", ""),
+            round(item.get("so_tien", 0.0)),
+            item.get("ngay_ht"),
+        ]
+        for ci, v in enumerate(vals, start=1):
+            c = ws.cell(cur_r, ci, v)
+            c.font = font_reg
+            c.border = border_all
+            if ci in (4, 6, 8):
+                c.number_format = "@"
+                c.alignment = al_c
+            elif ci == 9:
+                c.number_format = num_fmt
+                c.alignment = al_r
+            elif ci == 10:
+                c.number_format = "dd/mm/yyyy"
+                c.alignment = al_c
+            elif ci in (1, 2, 3, 7):
+                c.alignment = al_c
+            else:
+                c.alignment = al_l
+        cur_r += 1
+
+    widths = {1: 7, 2: 12, 3: 12, 4: 26, 5: 10, 6: 12, 7: 34, 8: 20, 9: 20, 10: 20}
+    for ci, w in widths.items():
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+
 def integrate_tq_and_qhns_into_workbook(
     excel_path: str,
     tq_excel_path: str,
@@ -531,13 +775,16 @@ def integrate_tq_and_qhns_into_workbook(
     output_path: Optional[str] = None,
     cutoff_date: Optional[datetime.date] = None,
     tq_ntnn_excel_path: Optional[str] = None,
+    target_cqt: Optional[str] = "7901",
 ) -> Dict[str, Any]:
     """
     Hàm tích hợp chính:
     1. Đọc Sổ Tổng Quan (TQ) từ tq_excel_path và chèn vào workbook excel_path.
-    2. Cập nhật cột đối chiếu F & G kèm Comment trên các sheet Năm ('2020'..'2025') cho GTGT (Dòng 23) và TNCN (Dòng 90).
-    3. Sinh sheet QHNS chuẩn 01 biểu duy nhất theo đúng nghiệp vụ thanh tra - kiểm tra thuế.
-    4. Lưu ra output_path (mặc định ghi đè/cập nhật chính excel_path).
+    2. Lọc đúng Cơ quan thuế quản lý (mặc định target_cqt='7901') để lên QHNS & đối chiếu F/G;
+       tự động tách riêng các dòng giao dịch thuộc CQT khác sang sheet 'TQ_CQT_Khac'.
+    3. Cập nhật cột đối chiếu F & G kèm Comment trên các sheet Năm ('2020'..'2025') cho GTGT, TNDN, TNCN, NTNN.
+    4. Sinh sheet QHNS & DoiChieu_QHNS chuẩn nghiệp vụ thanh tra - kiểm tra thuế.
+    5. Lưu ra output_path (mặc định ghi đè/cập nhật chính excel_path).
     """
     if output_path is None:
         output_path = excel_path
@@ -552,9 +799,13 @@ def integrate_tq_and_qhns_into_workbook(
     if ws_tq_src is None:
         ws_tq_src = wb_tq[wb_tq.sheetnames[0]]
 
-    tq_rows = parse_tq_rows(ws_tq_src)
-    if not tq_rows:
+    all_tq_rows = parse_tq_rows(ws_tq_src)
+    if not all_tq_rows:
         raise ValueError("Không tìm thấy dữ liệu giao dịch hợp lệ trong file Sổ Tổng Quan (TQ).")
+
+    norm_cqt = _normalize_cqt(target_cqt)
+    tq_rows, other_tq_rows = split_tq_rows_by_cqt(all_tq_rows, norm_cqt)
+    other_cqt_entries: List[Tuple[str, Dict[str, Any]]] = [("TQ", r) for r in other_tq_rows]
 
     # 2. Mở workbook tổng hợp tờ khai
     wb = openpyxl.load_workbook(excel_path, data_only=False)
@@ -566,7 +817,8 @@ def integrate_tq_and_qhns_into_workbook(
     elif detected_years:
         years = detected_years
     else:
-        ht_years = sorted({x["ht_year"] for x in tq_rows if 2015 <= x["ht_year"] <= 2035})
+        src_for_yr = tq_rows if tq_rows else all_tq_rows
+        ht_years = sorted({x["ht_year"] for x in src_for_yr if 2015 <= x["ht_year"] <= 2035})
         years = ht_years[-6:] if len(ht_years) > 6 else ht_years
 
     start_year, end_year = years[0], years[-1]
@@ -584,8 +836,10 @@ def integrate_tq_and_qhns_into_workbook(
                 break
         if ws_ntnn_src is None:
             ws_ntnn_src = wb_ntnn[wb_ntnn.sheetnames[0]]
-        ntnn_rows = parse_tq_rows(ws_ntnn_src)
-        if ntnn_rows:
+        all_ntnn_rows = parse_tq_rows(ws_ntnn_src)
+        if all_ntnn_rows:
+            ntnn_rows, other_ntnn_rows = split_tq_rows_by_cqt(all_ntnn_rows, norm_cqt)
+            other_cqt_entries.extend([("TQ_NTNN", r) for r in other_ntnn_rows])
             ntnn_metrics = compute_tq_metrics(ntnn_rows, start_year, end_year)
 
     # 3. Chép sheet TQ (và TQ_NTNN nếu có) vào workbook đích
@@ -1455,6 +1709,15 @@ def integrate_tq_and_qhns_into_workbook(
     for c_idx, w in dc_widths.items():
         ws_dc.column_dimensions[get_column_letter(c_idx)].width = w
 
+    # Xuất riêng sheet TQ_CQT_Khac nếu Sổ Tổng Quan có giao dịch tại cơ quan thuế khác target_cqt (VD khác 7901)
+    if other_cqt_entries:
+        _write_other_cqt_sheet(wb, other_cqt_entries, norm_cqt or "7901")
+        other_cqts_list = sorted({item.get("cqt") or "Khác" for _, item in other_cqt_entries})
+        alerts.append(
+            f"Đã tách riêng {len(other_cqt_entries)} dòng giao dịch thuộc CQT khác {norm_cqt or '7901'} "
+            f"({', '.join(other_cqts_list)}) sang sheet 'TQ_CQT_Khac' (KHÔNG gộp vào biểu QHNS của CQT {norm_cqt or '7901'})."
+        )
+
     # Cập nhật / bổ sung sheet biểu tính tiền chậm nộp & xử phạt VPHC và Báo cáo tổng hợp Biên bản
     from penalty_calculator import add_late_payment_sheet
     from report_builder import add_audit_report_sheet
@@ -1468,4 +1731,6 @@ def integrate_tq_and_qhns_into_workbook(
         "years": years,
         "alerts": alerts,
         "metrics": metrics,
+        "target_cqt": norm_cqt,
+        "other_cqt_count": len(other_cqt_entries),
     }
