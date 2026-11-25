@@ -654,12 +654,10 @@ NTNN_HEADERS = [
     "Thuế GTGT phải nộp",
     "Doanh thu tính thuế TNDN\n(chưa gồm GTGT)",
     "Thuế TNDN phải nộp",
-    "Doanh thu chưa gồm GTGT\n(Lên biểu năm)",
     "Tổng thuế NTNN\nphải nộp",
 ]
-# Cột số liệu:
-# M(13)=DT GTGT, N(14)=Thuế GTGT, O(15)=DT TNDN (chưa gồm GTGT), P(16)=Thuế TNDN,
-# Q(17)=DT chưa gồm GTGT (lên C95), R(18)=Tổng thuế NTNN phải nộp (=N+P)
+# Cột số liệu nguyên bản trên 'So Thue NTNN Cuoi':
+# M(13)=DT GTGT, N(14)=Thuế GTGT, O(15)=DT TNDN (chưa gồm GTGT -> lên C95), P(16)=Thuế TNDN (-> lên C98), Q(17)=Tổng thuế NTNN
 
 
 def _style_ntnn_header(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
@@ -677,7 +675,7 @@ def _style_ntnn_header(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
         c.alignment = al_c
         c.border = b_thin
 
-    widths = [6, 28, 15, 28, 10, 12, 12, 12, 11, 8, 12, 11, 18, 17, 19, 17, 19, 18]
+    widths = [6, 28, 15, 28, 10, 12, 12, 12, 11, 8, 12, 16, 18, 17, 19, 17, 18]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.freeze_panes = "C2"
@@ -715,12 +713,11 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
         round(m["thue_gtgt"]),
         round(m["dt_tndn"]),
         round(m["thue_tndn"]),
-        f"=IF(O{r}>0,O{r},MAX(0,M{r}-N{r}))",
-        f"=N{r}+P{r}",
+        round(m["tong_thue"]),
     ]
     for ci, v in enumerate(vals, start=1):
         c = ws.cell(r, ci, v)
-        c.font = f_bold if ci == 18 else f_reg
+        c.font = f_bold if ci == 17 else f_reg
         c.border = b_thin
         if ci == 3:
             c.number_format = "@"
@@ -737,7 +734,8 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
             c.alignment = al_l
 
 
-NTNN_DETAIL_HEADERS = [
+# Tiêu đề NGUYÊN BẢN theo đúng mẫu 01/NTNN của từng Thông tư (KHÔNG thêm bớt hay tự chế cột!)
+NTNN_DETAIL_HEADERS_TT103 = [
     "STT",
     "Tên file XML",
     "MST nộp thay",
@@ -745,21 +743,44 @@ NTNN_DETAIL_HEADERS = [
     "Loại TK",
     "Lần BS",
     "Ngày lập",
-    "Chuẩn mẫu",
-    "Nội dung / Tên nhà thầu [2]",
-    "MST nhà thầu [3]",
-    "Số hợp đồng [4]",
-    "Ngày hợp đồng [5]",
-    "Ngày thanh toán [6]",
-    "Doanh thu tính thuế GTGT",
-    "Tỷ lệ GTGT (%)",
-    "Thuế GTGT phải nộp",
-    "Doanh thu tính thuế TNDN\n(chưa gồm GTGT)",
-    "Tỷ lệ TNDN (%)",
-    "Miễn giảm Hiệp định",
-    "Thuế TNDN phải nộp",
-    "Doanh thu chưa gồm GTGT",
-    "Tổng thuế NTNN\nphải nộp",
+    "Kiểu kỳ",
+    "Nội dung (2)",
+    "MST của NTNN (3)",
+    "Số hợp đồng (4)",
+    "Ngày hợp đồng (5)",
+    "Doanh thu tính thuế GTGT (6)",
+    "Tỷ lệ % tính thuế GTGT (7)",
+    "Thuế GTGT phải nộp (8)",
+    "Doanh thu tính thuế TNDN (9)",
+    "Tỷ lệ % thuế TNDN (10)",
+    "Thuế miễn giảm Hiệp định (11)",
+    "Thuế TNDN phải nộp (12)",
+    "Tổng số thuế phải nộp NSNN (13)",
+    "Trạng thái / Báo trùng",
+]
+
+NTNN_DETAIL_HEADERS_TT80 = [
+    "STT",
+    "Tên file XML",
+    "MST nộp thay",
+    "Kỳ kê khai",
+    "Loại TK",
+    "Lần BS",
+    "Ngày lập",
+    "Kiểu kỳ",
+    "Nội dung (2)",
+    "MST của NTNN (3)",
+    "Số hợp đồng (4)",
+    "Ngày hợp đồng (5)",
+    "Ngày thanh toán (6)",
+    "Doanh thu tính thuế GTGT (7)",
+    "Tỷ lệ % tính thuế GTGT (8)",
+    "Thuế GTGT phải nộp (9)",
+    "Doanh thu tính thuế TNDN (10)",
+    "Tỷ lệ % thuế TNDN (11)",
+    "Thuế miễn giảm Hiệp định (12)",
+    "Thuế TNDN phải nộp (13)",
+    "Tổng số thuế phải nộp NSNN (14)",
     "Trạng thái / Báo trùng",
 ]
 
@@ -804,22 +825,24 @@ def get_ntnn_contract_rows(d: TaxDeclaration) -> List[Dict[str, Any]]:
     }]
 
 
-def write_ntnn_timeline_sheet(
+def _write_ntnn_detail_sheet_for_schema(
     wb: openpyxl.Workbook,
     declarations: List[TaxDeclaration],
+    dup_notes: Dict[int, str],
     existing_sheets: Set[str],
-    sheet_name: str = "So Thue NTNN TH",
+    sheet_name: str,
+    is_tt103: bool,
 ) -> None:
-    """
-    Sheet 1: Tổng hợp CHI TIẾT TẤT CẢ CÁC HỢP ĐỒNG trên toàn bộ tờ khai Thuế Nhà Thầu
-    (chính thức + bổ sung) theo dòng thời gian để kiểm tra đối chiếu từng hợp đồng.
-    """
+    """Xuất nguyên bản từng dòng hợp đồng theo ĐÚNG cấu trúc chỉ tiêu gốc của Thông tư (TT103 hoặc TT80)."""
     if not declarations:
         return
     if sheet_name in wb.sheetnames:
         del wb[sheet_name]
     existing_sheets.add(sheet_name)
     ws = wb.create_sheet(title=sheet_name)
+
+    headers = NTNN_DETAIL_HEADERS_TT103 if is_tt103 else NTNN_DETAIL_HEADERS_TT80
+    total_cols = len(headers)
 
     f_hdr = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
     fill_hdr = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -835,22 +858,34 @@ def write_ntnn_timeline_sheet(
     al_r = Alignment(horizontal="right", vertical="center")
 
     ws.row_dimensions[1].height = 30
-    for ci, h in enumerate(NTNN_DETAIL_HEADERS, start=1):
+    for ci, h in enumerate(headers, start=1):
         c = ws.cell(1, ci, h)
         c.font = f_hdr
         c.fill = fill_hdr
         c.alignment = al_c
         c.border = b_thin
 
-    widths = [6, 26, 14, 12, 11, 7, 12, 16, 32, 14, 18, 12, 13, 18, 10, 17, 19, 10, 15, 17, 19, 18, 36]
+    if is_tt103:
+        widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 14, 18, 12, 18, 10, 17, 18, 10, 15, 17, 18, 36]
+        sum_cols = (13, 15, 16, 18, 19, 20)
+        rate_cols = (14, 17)
+        tot_tax_col = 20
+        status_col = 21
+    else:
+        widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 14, 18, 12, 13, 18, 10, 17, 18, 10, 15, 17, 18, 36]
+        sum_cols = (14, 16, 17, 19, 20, 21)
+        rate_cols = (15, 18)
+        tot_tax_col = 21
+        status_col = 22
+
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.freeze_panes = "E2"
 
-    dup_notes = find_ntnn_duplicates(declarations)
     sorted_decls = sorted(declarations, key=_sort_key_ntnn)
     cur_r = 2
     stt = 0
+    dup_in_sheet = 0
     for d in sorted_decls:
         lan_int = int(d.so_lan) if str(d.so_lan or "").isdigit() else 0
         loai_txt = "Bổ sung" if lan_int > 0 else "Chính thức"
@@ -858,11 +893,12 @@ def write_ntnn_timeline_sheet(
         dup_msg = dup_notes.get(id(d), "")
         status_txt = dup_msg if dup_msg else "Hợp lệ"
         is_dup = bool(dup_msg)
+        if is_dup:
+            dup_in_sheet += 1
         contract_rows = get_ntnn_contract_rows(d)
         for cr in contract_rows:
             stt += 1
-            schema_disp = f"{cr.get('schema') or 'TT80'} ({ky_mode_txt})"
-            vals = [
+            base_vals = [
                 stt,
                 d.file_name,
                 d.mst,
@@ -870,12 +906,15 @@ def write_ntnn_timeline_sheet(
                 loai_txt,
                 lan_int,
                 d.ngay_lap,
-                schema_disp,
+                ky_mode_txt,
                 cr.get("noi_dung", ""),
                 cr.get("mst_nt", ""),
                 cr.get("so_hd", ""),
                 cr.get("ngay_hd", ""),
-                cr.get("ngay_tt", ""),
+            ]
+            if not is_tt103:
+                base_vals.append(cr.get("ngay_tt", ""))
+            vals = base_vals + [
                 round(float(cr.get("dt_gtgt", 0.0))),
                 float(cr.get("ty_le_gtgt", 0.0)),
                 round(float(cr.get("thue_gtgt", 0.0))),
@@ -883,17 +922,16 @@ def write_ntnn_timeline_sheet(
                 float(cr.get("ty_le_tndn", 0.0)),
                 round(float(cr.get("mien_giam", 0.0))),
                 round(float(cr.get("thue_tndn", 0.0))),
-                f"=IF(Q{cur_r}>0,Q{cur_r},MAX(0,N{cur_r}-P{cur_r}))",
-                f"=P{cur_r}+T{cur_r}",
+                round(float(cr.get("tong_thue", 0.0))),
                 status_txt,
             ]
             for ci, v in enumerate(vals, start=1):
                 c = ws.cell(cur_r, ci, v)
                 if is_dup:
-                    c.font = f_dup if ci in (22, 23) else f_reg
+                    c.font = f_dup if ci in (tot_tax_col, status_col) else f_reg
                     c.fill = fill_dup
                 else:
-                    c.font = f_bold if ci == 22 else f_reg
+                    c.font = f_bold if ci == tot_tax_col else f_reg
                 c.border = b_thin
                 if ci in (3, 10, 11):
                     c.number_format = "@"
@@ -901,35 +939,60 @@ def write_ntnn_timeline_sheet(
                 elif ci == 7:
                     c.number_format = "dd/mm/yyyy"
                     c.alignment = al_c
-                elif ci in (1, 4, 5, 6, 8, 12, 13):
+                elif ci in (1, 4, 5, 6, 8, 12) or (not is_tt103 and ci == 13):
                     c.alignment = al_c
-                elif ci in (15, 18):
+                elif ci in rate_cols:
                     c.number_format = "0.##"
                     c.alignment = al_r
-                elif 14 <= ci <= 22:
+                elif ci in sum_cols:
                     c.number_format = "#,##0"
                     c.alignment = al_r
                 else:
                     c.alignment = al_l
             cur_r += 1
 
-    # Dòng TỔNG CỘNG chi tiết hợp đồng
     if stt > 0:
         r_end = cur_r - 1
         ws.cell(cur_r, 9, "TỔNG CỘNG").alignment = al_c
-        for ci in (14, 16, 17, 19, 20, 21, 22):
+        for ci in sum_cols:
             col_l = get_column_letter(ci)
             c = ws.cell(cur_r, ci, f"=SUM({col_l}2:{col_l}{r_end})")
             c.number_format = "#,##0"
             c.alignment = al_r
-        if dup_notes:
-            ws.cell(cur_r, 23, f"Có {len(dup_notes)} tờ khai trùng (đã tự loại khỏi So Thue NTNN Cuoi)").alignment = al_l
-        for ci in range(1, 24):
+        if dup_in_sheet:
+            ws.cell(cur_r, status_col, f"Có {dup_in_sheet} tờ khai trùng (đã tự loại khỏi So Thue NTNN Cuoi)").alignment = al_l
+        for ci in range(1, total_cols + 1):
             c = ws.cell(cur_r, ci)
             c.font = f_bold
             c.fill = fill_tot
             c.border = b_thin
-        ws.auto_filter.ref = f"A1:W{r_end}"
+        ws.auto_filter.ref = f"A1:{get_column_letter(total_cols)}{r_end}"
+
+
+def write_ntnn_timeline_sheet(
+    wb: openpyxl.Workbook,
+    declarations: List[TaxDeclaration],
+    existing_sheets: Set[str],
+    sheet_name: str = "So Thue NTNN TH",
+) -> None:
+    """
+    Sheet 1: Xuất NGUYÊN BẢN chi tiết từng dòng hợp đồng trên tất cả tờ khai Thuế Nhà Thầu,
+    tách riêng mẫu TT103/2014 (cột 2..13) và mẫu TT80/2021 (cột 2..14) khi hồ sơ có cả 2 thời kỳ
+    để tuyệt đối không thêm bớt hay làm lệch chỉ tiêu gốc của từng Thông tư.
+    """
+    if not declarations:
+        return
+    dup_notes = find_ntnn_duplicates(declarations)
+    tt103_decls = [d for d in declarations if get_ntnn_metrics(d)["schema"] == "TT103"]
+    tt80_decls = [d for d in declarations if get_ntnn_metrics(d)["schema"] != "TT103"]
+
+    if tt103_decls and tt80_decls:
+        _write_ntnn_detail_sheet_for_schema(wb, tt103_decls, dup_notes, existing_sheets, f"{sheet_name} (TT103)", is_tt103=True)
+        _write_ntnn_detail_sheet_for_schema(wb, tt80_decls, dup_notes, existing_sheets, f"{sheet_name} (TT80)", is_tt103=False)
+    elif tt103_decls:
+        _write_ntnn_detail_sheet_for_schema(wb, tt103_decls, dup_notes, existing_sheets, sheet_name, is_tt103=True)
+    else:
+        _write_ntnn_detail_sheet_for_schema(wb, tt80_decls, dup_notes, existing_sheets, sheet_name, is_tt103=False)
 
 
 def write_ntnn_cuoi_sheet(
@@ -981,12 +1044,12 @@ def write_ntnn_cuoi_sheet(
         r_sum = cur_r
         year_sum_rows[yr] = r_sum
         ws.cell(r_sum, 6, f"Tổng cộng năm {yr}").alignment = al_c
-        for ci in range(13, 19):
+        for ci in range(13, 18):
             col_l = get_column_letter(ci)
             c = ws.cell(r_sum, ci, f"=SUM({col_l}{r_start}:{col_l}{r_end})")
             c.number_format = "#,##0"
             c.alignment = al_r
-        for ci in range(1, 19):
+        for ci in range(1, 18):
             c = ws.cell(r_sum, ci)
             c.font = f_bold
             c.fill = fill_yr
@@ -997,12 +1060,12 @@ def write_ntnn_cuoi_sheet(
     if year_sum_rows:
         r_grand = cur_r
         ws.cell(r_grand, 6, "TỔNG CỘNG TẤT CẢ CÁC NĂM").alignment = al_c
-        for ci in range(13, 19):
+        for ci in range(13, 18):
             col_l = get_column_letter(ci)
             c = ws.cell(r_grand, ci, "=" + "+".join(f"{col_l}{rr}" for rr in year_sum_rows.values()))
             c.number_format = "#,##0"
             c.alignment = al_r
-        for ci in range(1, 19):
+        for ci in range(1, 18):
             c = ws.cell(r_grand, ci)
             c.font = f_bold
             c.fill = fill_tot

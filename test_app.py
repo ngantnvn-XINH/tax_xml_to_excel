@@ -1125,25 +1125,26 @@ class TestTaxXmlToExcel(unittest.TestCase):
             export_to_excel(decls, out_xlsx)
 
             wb = openpyxl.load_workbook(out_xlsx, data_only=False)
-            self.assertIn("So Thue NTNN TH", wb.sheetnames)
+            # Có cả TT103 (2021) và TT80 (2024) -> tách nguyên bản thành 2 sheet đúng chuẩn từng Thông tư!
+            self.assertIn("So Thue NTNN TH (TT103)", wb.sheetnames)
+            self.assertIn("So Thue NTNN TH (TT80)", wb.sheetnames)
             self.assertIn("So Thue NTNN Cuoi", wb.sheetnames)
             self.assertIn("2021", wb.sheetnames)
             self.assertIn("2024", wb.sheetnames)
 
-            # So Thue NTNN TH có đủ 3 dòng hợp đồng (row 2..4) + 1 dòng TỔNG CỘNG (row 5)
-            ws_th = wb["So Thue NTNN TH"]
-            self.assertEqual(ws_th.max_row, 5)
-            self.assertEqual(ws_th.cell(5, 9).value, "TỔNG CỘNG")
+            # TT103: 1 dòng (row 2) + 1 TỔNG CỘNG (row 3); TT80: 2 dòng (row 2..3) + 1 TỔNG CỘNG (row 4)
+            self.assertEqual(wb["So Thue NTNN TH (TT103)"].max_row, 3)
+            self.assertEqual(wb["So Thue NTNN TH (TT80)"].max_row, 4)
             ws_cuoi = wb["So Thue NTNN Cuoi"]
             self.assertEqual(ws_cuoi.cell(3, 6).value, "Tổng cộng năm 2021")
             self.assertEqual(ws_cuoi.cell(5, 6).value, "Tổng cộng năm 2024")
             self.assertEqual(ws_cuoi.cell(4, 15).value, 300_000_000)  # Bản BS1 thay thế bản chính thức
 
-            # Kiểm tra công thức liên kết sang sheet '2021' và '2024' (C95=DT chưa gồm GTGT, C97=GTGT NTNN, C98=TNDN NTNN)
-            self.assertEqual(wb["2021"]["C95"].value, "='So Thue NTNN Cuoi'!Q3")
+            # Kiểm tra công thức liên kết sang sheet '2021' và '2024' (C95=DT TNDN chưa gồm GTGT cột O, C97=GTGT cột N, C98=TNDN cột P)
+            self.assertEqual(wb["2021"]["C95"].value, "='So Thue NTNN Cuoi'!O3")
             self.assertEqual(wb["2021"]["C97"].value, "='So Thue NTNN Cuoi'!N3")
             self.assertEqual(wb["2021"]["C98"].value, "='So Thue NTNN Cuoi'!P3")
-            self.assertEqual(wb["2024"]["C95"].value, "='So Thue NTNN Cuoi'!Q5")
+            self.assertEqual(wb["2024"]["C95"].value, "='So Thue NTNN Cuoi'!O5")
             self.assertEqual(wb["2024"]["C97"].value, "='So Thue NTNN Cuoi'!N5")
             self.assertEqual(wb["2024"]["C98"].value, "='So Thue NTNN Cuoi'!P5")
 
@@ -1728,10 +1729,12 @@ class TestTaxXmlToExcel(unittest.TestCase):
             export_to_excel([d_main_2021, d_main_dup, d_nt_dup, d_nt_2024], out_x)
             wb = openpyxl.load_workbook(out_x, data_only=False)
 
-            # So Thue NTNN TH: giữ đủ cả 4 tờ khai (row 2..5) + dòng TỔNG CỘNG (row 6), và báo trùng trên bản thứ 2 của 06/2024!
-            ws_th = wb["So Thue NTNN TH"]
-            self.assertEqual(ws_th.max_row, 6)
-            statuses = [str(ws_th.cell(r, 23).value or "") for r in range(2, 6)]
+            # Có cả TT103 (2021) và TT80 (2024) -> tách nguyên bản: TT103 có 1 tờ khai; TT80 có 3 tờ khai (trong đó 1 bản 06/2024 bị báo trùng ở cột 22)!
+            ws_th_103 = wb["So Thue NTNN TH (TT103)"]
+            ws_th_80 = wb["So Thue NTNN TH (TT80)"]
+            self.assertEqual(ws_th_103.max_row, 3)
+            self.assertEqual(ws_th_80.max_row, 5)
+            statuses = [str(ws_th_80.cell(r, 22).value or "") for r in range(2, 5)]
             self.assertEqual(sum(1 for s in statuses if "TRÙNG TỜ KHAI" in s), 1)
 
             # So Thue NTNN Cuoi: loại 1 bản trùng 06/2024 -> chỉ còn 3 tờ khai (2021: 1 dòng + 1 tổng; 2024: 2 dòng + 1 tổng; + 1 grand total = 7 dòng cả header)
