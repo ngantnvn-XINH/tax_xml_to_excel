@@ -1685,6 +1685,62 @@ class TestTaxXmlToExcel(unittest.TestCase):
         # Dư cuối kỳ = 120tr + 55tr - 175tr = 0 (KHỚP 100%!)
         self.assertEqual(round(m["opening_exact"]["1701"] + m["gtgt_tk_by_ky"][2020] - m["gtgt_c2_by_ht"][2020]), 0)
 
+    def test_v16_ntnn_merge_two_msts_and_flag_duplicates(self) -> None:
+        """Kiểm thử v1.6: Gộp NTNN từ cả 2 thư mục (MST công ty chính + MST nhà thầu riêng), báo trùng trên So Thue NTNN TH và tự loại bản trùng khi tổng hợp trên So Thue NTNN Cuoi."""
+        import datetime
+        from excel_exporter import export_to_excel
+        from tax_parser import TaxDeclaration
+
+        # 1. Kỳ 03/2021 nộp qua MST công ty chính (không có ở MST nhà thầu) -> PHẢI GIỮ
+        d_main_2021 = TaxDeclaration(
+            file_path="main_2021_03.xml", file_name="main_2021_03.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000088", ten_nnt="Cong ty Mau E", ky_kkhai="03/2021",
+            tu_ngay=datetime.date(2021, 3, 1), den_ngay=datetime.date(2021, 3, 31),
+            ngay_lap=datetime.date(2021, 4, 15), so_lan="0",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_tndn": 200_000_000, "_ntnn_thue_tndn": 10_000_000, "_ntnn_schema": "TT103"},
+        )
+        # 2. Kỳ 06/2024 trùng y như nhau giữa MST công ty chính và MST nhà thầu riêng -> TH giữ cả 2 + báo trùng; Cuoi chỉ giữ 1!
+        d_main_dup = TaxDeclaration(
+            file_path="main_2024_06.xml", file_name="main_2024_06.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000088", ten_nnt="Cong ty Mau E", ky_kkhai="06/2024",
+            tu_ngay=datetime.date(2024, 6, 1), den_ngay=datetime.date(2024, 6, 30),
+            ngay_lap=datetime.date(2024, 7, 10), so_lan="0",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_tndn": 100_000_000, "_ntnn_thue_tndn": 5_000_000, "_ntnn_schema": "TT80"},
+        )
+        d_nt_dup = TaxDeclaration(
+            file_path="ntnn_2024_06.xml", file_name="ntnn_2024_06.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ten_nnt="Cong ty Mau E (NTNN)", ky_kkhai="06/2024",
+            tu_ngay=datetime.date(2024, 6, 1), den_ngay=datetime.date(2024, 6, 30),
+            ngay_lap=datetime.date(2024, 7, 10), so_lan="0",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_tndn": 100_000_000, "_ntnn_thue_tndn": 5_000_000, "_ntnn_schema": "TT80"},
+        )
+        # 3. Kỳ 07/2024 chỉ có ở MST nhà thầu riêng -> PHẢI GIỮ
+        d_nt_2024 = TaxDeclaration(
+            file_path="ntnn_2024_07.xml", file_name="ntnn_2024_07.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ten_nnt="Cong ty Mau E (NTNN)", ky_kkhai="07/2024",
+            tu_ngay=datetime.date(2024, 7, 1), den_ngay=datetime.date(2024, 7, 31),
+            ngay_lap=datetime.date(2024, 8, 10), so_lan="0",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_tndn": 160_000_000, "_ntnn_thue_tndn": 8_000_000, "_ntnn_schema": "TT80"},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_x = os.path.join(tmpdir, "ntnn_2mst.xlsx")
+            export_to_excel([d_main_2021, d_main_dup, d_nt_dup, d_nt_2024], out_x)
+            wb = openpyxl.load_workbook(out_x, data_only=False)
+
+            # So Thue NTNN TH: giữ đủ cả 4 tờ khai (row 2..5) + dòng TỔNG CỘNG (row 6), và báo trùng trên bản thứ 2 của 06/2024!
+            ws_th = wb["So Thue NTNN TH"]
+            self.assertEqual(ws_th.max_row, 6)
+            statuses = [str(ws_th.cell(r, 23).value or "") for r in range(2, 6)]
+            self.assertEqual(sum(1 for s in statuses if "TRÙNG TỜ KHAI" in s), 1)
+
+            # So Thue NTNN Cuoi: loại 1 bản trùng 06/2024 -> chỉ còn 3 tờ khai (2021: 1 dòng + 1 tổng; 2024: 2 dòng + 1 tổng; + 1 grand total = 7 dòng cả header)
+            ws_c = wb["So Thue NTNN Cuoi"]
+            kept_kys = [ws_c.cell(r, 6).value for r in range(2, ws_c.max_row + 1)]
+            self.assertEqual(kept_kys.count("03/2021"), 1)
+            self.assertEqual(kept_kys.count("06/2024"), 1)
+            self.assertEqual(kept_kys.count("07/2024"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

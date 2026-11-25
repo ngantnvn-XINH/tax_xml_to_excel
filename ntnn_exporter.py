@@ -568,36 +568,62 @@ def is_ntnn_per_occurrence(d: TaxDeclaration) -> bool:
     return False
 
 
+def _ntnn_content_fingerprint(d: TaxDeclaration) -> Tuple[Any, ...]:
+    """
+    Khóa nhận diện 2 tờ khai NTNN trùng y như nhau (bất kể nằm ở thư mục MST công ty chính
+    hay thư mục MST nhà thầu riêng, bất kể tên file khác nhau):
+    cùng kỳ kê khai + cùng số Doanh thu GTGT, Thuế GTGT, Doanh thu TNDN, Thuế TNDN.
+    """
+    m = get_ntnn_metrics(d)
+    ky_norm = (d.ky_kkhai or "").strip().upper() or (d.tu_ngay.strftime("%d/%m/%Y") if d.tu_ngay else "")
+    return (
+        ky_norm,
+        round(m["dt_gtgt"]),
+        round(m["thue_gtgt"]),
+        round(m["dt_tndn"]),
+        round(m["thue_tndn"]),
+    )
+
+
+def find_ntnn_duplicates(declarations: List[TaxDeclaration]) -> Dict[int, str]:
+    """
+    Phát hiện các tờ khai NTNN cùng kỳ và trùng y như nhau về số liệu (kể cả trùng chéo giữa
+    thư mục MST công ty chính và thư mục MST nhà thầu riêng).
+    Trả về dict {id(d): thông_báo_trùng} cho các bản bị trùng (bản đầu tiên được giữ là Hợp lệ).
+    """
+    sorted_decls = sorted(declarations, key=_sort_key_ntnn)
+    seen: Dict[Tuple[Any, ...], TaxDeclaration] = {}
+    dup_notes: Dict[int, str] = {}
+    for d in sorted_decls:
+        fp = _ntnn_content_fingerprint(d)
+        # Chỉ báo trùng chéo khi có số liệu thực (tránh báo trùng các tờ khai trắng 0 đồng khác kỳ)
+        if fp in seen:
+            orig = seen[fp]
+            mst_info = f"MST {orig.mst}" if orig.mst else ""
+            dup_notes[id(d)] = f"TRÙNG TỜ KHAI với {orig.file_name} ({mst_info}) - Đã loại khỏi NTNN Cuoi"
+        else:
+            seen[fp] = d
+    return dup_notes
+
+
 def filter_latest_ntnn_declarations(declarations: List[TaxDeclaration]) -> List[TaxDeclaration]:
     """
-    Chốt danh sách tờ khai NTNN đưa vào 'So Thue NTNN Cuoi' theo ĐÚNG quy tắc nghiệp vụ:
+    Chốt danh sách tờ khai NTNN đưa vào 'So Thue NTNN Cuoi' từ CẢ 2 thư mục (MST công ty chính + MST nhà thầu):
+    0. Loại bỏ các tờ khai cùng kỳ trùng y như nhau về số liệu (kể cả trùng chéo giữa 2 MST).
     1. Tờ khai NTNN kê khai THEO THÁNG / QUÝ / NĂM:
        - Mỗi (MST, kỳ kê khai) chỉ lấy 01 tờ khai hiệu lực CUỐI CÙNG (so_lan lớn nhất; cùng lần giữ ngay_lap mới nhất).
     2. Tờ khai NTNN kê khai THEO LẦN PHÁT SINH (THEO NGÀY):
-       - GIỮ VÀ CỘNG TẤT CẢ CẢ TỜ KHAI CHÍNH THỨC VÀ TỜ KHAI BỔ SUNG (chỉ loại bản trùng file giống hệt nhau
-         nếu người dùng lỡ kéo nạp cùng 1 file 2 lần).
+       - GIỮ VÀ CỘNG TẤT CẢ CẢ TỜ KHAI CHÍNH THỨC VÀ TỜ KHAI BỔ SUNG (sau khi đã loại bản trùng y như nhau ở bước 0).
     """
+    dup_notes = find_ntnn_duplicates(declarations)
     periodic_grouped: Dict[Tuple[str, str], List[TaxDeclaration]] = {}
     per_occurrence_list: List[TaxDeclaration] = []
-    seen_occ_fp: Set[Tuple[Any, ...]] = set()
 
     for d in declarations:
+        if id(d) in dup_notes:
+            continue
         if is_ntnn_per_occurrence(d):
-            m = get_ntnn_metrics(d)
-            fp = (
-                d.mst or "",
-                d.ky_kkhai or "",
-                str(d.so_lan or "0").strip(),
-                d.ngay_lap,
-                d.file_name or "",
-                round(m["dt_gtgt"]),
-                round(m["thue_gtgt"]),
-                round(m["dt_tndn"]),
-                round(m["thue_tndn"]),
-            )
-            if fp not in seen_occ_fp:
-                seen_occ_fp.add(fp)
-                per_occurrence_list.append(d)
+            per_occurrence_list.append(d)
         else:
             ky_key = (d.ky_kkhai or "").strip().upper() or (d.tu_ngay.strftime("%m/%Y") if d.tu_ngay else "")
             periodic_grouped.setdefault((d.mst or "", ky_key), []).append(d)
@@ -734,6 +760,7 @@ NTNN_DETAIL_HEADERS = [
     "Thuế TNDN phải nộp",
     "Doanh thu chưa gồm GTGT",
     "Tổng thuế NTNN\nphải nộp",
+    "Trạng thái / Báo trùng",
 ]
 
 
@@ -797,8 +824,10 @@ def write_ntnn_timeline_sheet(
     f_hdr = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
     fill_hdr = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     fill_tot = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    fill_dup = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
     f_reg = Font(name="Calibri", size=9)
     f_bold = Font(name="Calibri", size=9, bold=True)
+    f_dup = Font(name="Calibri", size=9, bold=True, color="9C0006")
     thin = Side(style="thin", color="000000")
     b_thin = Border(left=thin, right=thin, top=thin, bottom=thin)
     al_c = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -813,11 +842,12 @@ def write_ntnn_timeline_sheet(
         c.alignment = al_c
         c.border = b_thin
 
-    widths = [6, 26, 14, 12, 11, 7, 12, 16, 32, 14, 18, 12, 13, 18, 10, 17, 19, 10, 15, 17, 19, 18]
+    widths = [6, 26, 14, 12, 11, 7, 12, 16, 32, 14, 18, 12, 13, 18, 10, 17, 19, 10, 15, 17, 19, 18, 36]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.freeze_panes = "E2"
 
+    dup_notes = find_ntnn_duplicates(declarations)
     sorted_decls = sorted(declarations, key=_sort_key_ntnn)
     cur_r = 2
     stt = 0
@@ -825,6 +855,9 @@ def write_ntnn_timeline_sheet(
         lan_int = int(d.so_lan) if str(d.so_lan or "").isdigit() else 0
         loai_txt = "Bổ sung" if lan_int > 0 else "Chính thức"
         ky_mode_txt = "Lần PS" if is_ntnn_per_occurrence(d) else "Tháng/Kỳ"
+        dup_msg = dup_notes.get(id(d), "")
+        status_txt = dup_msg if dup_msg else "Hợp lệ"
+        is_dup = bool(dup_msg)
         contract_rows = get_ntnn_contract_rows(d)
         for cr in contract_rows:
             stt += 1
@@ -852,10 +885,15 @@ def write_ntnn_timeline_sheet(
                 round(float(cr.get("thue_tndn", 0.0))),
                 f"=IF(Q{cur_r}>0,Q{cur_r},MAX(0,N{cur_r}-P{cur_r}))",
                 f"=P{cur_r}+T{cur_r}",
+                status_txt,
             ]
             for ci, v in enumerate(vals, start=1):
                 c = ws.cell(cur_r, ci, v)
-                c.font = f_bold if ci == 22 else f_reg
+                if is_dup:
+                    c.font = f_dup if ci in (22, 23) else f_reg
+                    c.fill = fill_dup
+                else:
+                    c.font = f_bold if ci == 22 else f_reg
                 c.border = b_thin
                 if ci in (3, 10, 11):
                     c.number_format = "@"
@@ -868,7 +906,7 @@ def write_ntnn_timeline_sheet(
                 elif ci in (15, 18):
                     c.number_format = "0.##"
                     c.alignment = al_r
-                elif ci >= 14:
+                elif 14 <= ci <= 22:
                     c.number_format = "#,##0"
                     c.alignment = al_r
                 else:
@@ -884,12 +922,14 @@ def write_ntnn_timeline_sheet(
             c = ws.cell(cur_r, ci, f"=SUM({col_l}2:{col_l}{r_end})")
             c.number_format = "#,##0"
             c.alignment = al_r
-        for ci in range(1, 23):
+        if dup_notes:
+            ws.cell(cur_r, 23, f"Có {len(dup_notes)} tờ khai trùng (đã tự loại khỏi So Thue NTNN Cuoi)").alignment = al_l
+        for ci in range(1, 24):
             c = ws.cell(cur_r, ci)
             c.font = f_bold
             c.fill = fill_tot
             c.border = b_thin
-        ws.auto_filter.ref = f"A1:V{r_end}"
+        ws.auto_filter.ref = f"A1:W{r_end}"
 
 
 def write_ntnn_cuoi_sheet(
