@@ -88,239 +88,40 @@ def detect_ntnn_schema(
     year: Optional[int] = None,
 ) -> str:
     """
-    Nhận diện chuẩn cột thực tế của tờ khai 01/NTNN từ chính cấu trúc thẻ XML:
-    - 'M13' (Mặc định chuẩn 13 cột (1)..(13) của Mẫu 01/NTNN TT103 & TT80):
-        (1) Nội dung, (2) MST, (3) Hợp đồng số... ngày..., (4) Doanh thu chưa bao gồm thuế GTGT,
-        (5) Ngày thanh toán, (6) DT tính thuế GTGT, (7) Tỷ lệ GTGT, (8) Thuế GTGT phải nộp,
-        (9) DT tính thuế TNDN, (10) Tỷ lệ TNDN, (11) Miễn giảm HĐ, (12) Thuế TNDN phải nộp, (13) Tổng thuế NSNN.
-    - 'M14' (Chỉ dùng khi XML thực sự có cột ct14 / tong_ct14 hoặc ct6 là Ngày thanh toán):
-        (6) Ngày thanh toán, (7) DT GTGT, (8) Tỷ lệ GTGT, (9) Thuế GTGT, (10) DT TNDN, (11) Tỷ lệ TNDN,
-        (12) Miễn giảm HĐ, (13) Thuế TNDN, (14) Tổng thuế NSNN.
+    Nhận diện chuẩn thẻ XML của tờ khai 01/NTNN:
+    - 'TCT_NESTED' (Chuẩn XML chính thức của TCT / HTKK / TaxOnline: <BKThueNTNN>/<ThueNTNN>
+      gồm ct1..ct5, <ThueGTGT> ct6=DT GTGT, ct7=Tỷ lệ, ct8=nil, ct9=Thuế GTGT,
+      <ThueTNDN> ct10=DT TNDN, ct11=Tỷ lệ, ct12=Miễn giảm, ct13=Thuế TNDN, và ct14=Tổng thuế;
+      tổng cộng: tong_ct6, tong_ct9, tong_ct10, tong_ct12, tong_ct13, tong_ct14).
+    - 'M14_SHIFTED' (Chỉ khi ct6 là ngày thanh toán -> ct7=DT GTGT, ct9=Thuế GTGT, ct10=DT TNDN, ct13=Thuế TNDN, ct14=Tổng thuế).
+    - 'M13_FLAT' (XML phẳng chỉ có ct1..ct13 không có ct14 và không có <ThueGTGT>/<ThueTNDN>).
     """
     scan_root = _get_main_declaration_root(root)
-    leaf_tags: Set[str] = set()
+    all_tags: Set[str] = set()
     ct6_is_date = False
 
     for el in _iter_non_khbs(scan_root):
         t = _strip_ns(el.tag).lower()
-        if len(el) == 0:
-            leaf_tags.add(t)
-            if t in ("ct6", "ct06", "ct_6") and el.text and _looks_like_date(el.text):
-                ct6_is_date = True
+        all_tags.add(t)
+        if len(el) == 0 and t in ("ct6", "ct06", "ct_6") and el.text and _looks_like_date(el.text):
+            ct6_is_date = True
 
-    if any(t in leaf_tags for t in ("ct14", "ct_14", "tong_ct14", "ct14_tong")) or ct6_is_date:
-        return "M14"
-    return "M13"
+    if ct6_is_date:
+        return "M14_SHIFTED"
+    if any(t in all_tags for t in ("thuentnn", "bkthuentnn", "thuegtgt", "thuetndn", "ct14", "ct_14", "tong_ct14")):
+        return "TCT_NESTED"
+    return "M13_FLAT"
 
 
-def extract_ntnn_totals_from_xml_root(
-    root: ET.Element,
-    ma_tkhai: str = "",
-    mo_ta_bmau: str = "",
-    ten_tkhai: str = "",
-    year: Optional[int] = None,
-) -> Dict[str, Any]:
-    """
-    Trích xuất chính xác các chỉ tiêu tổng cộng của tờ khai Thuế Nhà Thầu (01/NTNN, 02/NTNN, 03/NTNN, 04/NTNN)
-    từ cây XML gốc, phân biệt rạch ròi chuẩn mẫu TT103/2014 và TT80/2021:
-      - dt_gtgt: Doanh thu tính thuế GTGT
-      - thue_gtgt: Thuế GTGT phải nộp
-      - dt_tndn: Doanh thu tính thuế TNDN (Doanh thu chưa bao gồm thuế GTGT)
-      - thue_tndn: Thuế TNDN phải nộp
-      - tong_thue: Tổng cộng tiền thuế nhà thầu phải nộp
-      - schema: 'Semantic' | 'TT80' | 'TT103'
-    """
-    scan_root = _get_main_declaration_root(root)
-    total_map: Dict[str, Any] = {
-        "dt_chua_gtgt": 0.0,
-        "dt_gtgt": 0.0,
-        "thue_gtgt": 0.0,
-        "dt_tndn": 0.0,
-        "thue_tndn": 0.0,
-        "tong_thue": 0.0,
-        "schema": "",
-    }
-
-    # --- ƯU TIÊN 1: Thẻ có tên ngữ nghĩa rõ ràng (không bao giờ lệch giữa các thông tư) ---
-    sem_tot_dt_chua = {"tongdoanhthuchuagomgtgt", "tongdthuchuagtgt", "tong_dthu_chua_gtgt"}
-    sem_tot_dt_g = {"tongdoanhthugtgt", "tongdthutinhthuegtgt", "tongdthugtgt", "tong_dthu_gtgt"}
-    sem_tot_th_g = {"tongthuegtgt", "tongthuegtgtpnop", "tong_thue_gtgt", "tongthuegtgtphainop", "tongsothuegtgt"}
-    sem_tot_dt_t = {"tongdoanhthutndn", "tongdthutinhthuetndn", "tongdthutndn", "tong_dthu_tndn"}
-    sem_tot_th_t = {"tongthuetndn", "tongthuetndnpnop", "tong_thue_tndn", "tongthuetndnphainop", "tongsothuetndn"}
-    sem_tot_all = {"tongthuepnop", "tongthuephainop", "tongsothuepnop", "tongcong", "tong_thue_pnop"}
-
-    for el in _iter_non_khbs(scan_root):
-        if len(el) > 0 or not el.text or not el.text.strip():
-            continue
-        t = _strip_ns(el.tag).lower()
-        v = _to_float(el.text)
-        if v == 0:
-            continue
-        if t in sem_tot_dt_chua and total_map["dt_chua_gtgt"] == 0:
-            total_map["dt_chua_gtgt"] = v
-        elif t in sem_tot_dt_g and total_map["dt_gtgt"] == 0:
-            total_map["dt_gtgt"] = v
-        elif t in sem_tot_th_g and total_map["thue_gtgt"] == 0:
-            total_map["thue_gtgt"] = v
-        elif t in sem_tot_dt_t and total_map["dt_tndn"] == 0:
-            total_map["dt_tndn"] = v
-        elif t in sem_tot_th_t and total_map["thue_tndn"] == 0:
-            total_map["thue_tndn"] = v
-        elif t in sem_tot_all and total_map["tong_thue"] == 0:
-            total_map["tong_thue"] = v
-
-    if any(total_map[k] != 0 for k in ("dt_chua_gtgt", "dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
-        total_map["schema"] = "Semantic"
-        if total_map["tong_thue"] == 0:
-            total_map["tong_thue"] = total_map["thue_gtgt"] + total_map["thue_tndn"]
-        return total_map
-
-    # Kiểm tra dòng chi tiết có thẻ ngữ nghĩa rõ ràng
-    sem_row_dt_chua = {"doanhthuchuagomgtgt", "dthuchuagtgt", "dthuchuabaogomthuegtgt"}
-    sem_row_dt_g = {"dthutinhthuegtgt", "doanhthutinhthuegtgt", "doanhthugtgt"}
-    sem_row_th_g = {"thuegtgtpnop", "thuegtgtphainop", "sothuegtgt", "thuegtgt"}
-    sem_row_dt_t = {"dthutinhthuetndn", "doanhthutinhthuetndn", "doanhthutndn"}
-    sem_row_th_t = {"thuetndnpnop", "thuetndnphainop", "sothuetndn", "thuetndn"}
-    sem_row_all = {"tongthuepnop", "tongthuephainop", "tongsothuepnop"}
-
-    for el in _iter_non_khbs(scan_root):
-        children = list(el)
-        if not children:
-            continue
-        child_vals = {
-            _strip_ns(ch.tag).lower(): _to_float(ch.text)
-            for ch in children
-            if len(ch) == 0 and ch.text and ch.text.strip()
-        }
-        if not child_vals:
-            continue
-        if any(k in child_vals for k in sem_row_dt_chua | sem_row_dt_g | sem_row_th_g | sem_row_dt_t | sem_row_th_t):
-            for k in sem_row_dt_chua:
-                if k in child_vals:
-                    total_map["dt_chua_gtgt"] += child_vals[k]
-                    break
-            for k in sem_row_dt_g:
-                if k in child_vals:
-                    total_map["dt_gtgt"] += child_vals[k]
-                    break
-            for k in sem_row_th_g:
-                if k in child_vals:
-                    total_map["thue_gtgt"] += child_vals[k]
-                    break
-            for k in sem_row_dt_t:
-                if k in child_vals:
-                    total_map["dt_tndn"] += child_vals[k]
-                    break
-            for k in sem_row_th_t:
-                if k in child_vals:
-                    total_map["thue_tndn"] += child_vals[k]
-                    break
-            for k in sem_row_all:
-                if k in child_vals:
-                    total_map["tong_thue"] += child_vals[k]
-                    break
-
-    if any(total_map[k] != 0 for k in ("dt_chua_gtgt", "dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
-        total_map["schema"] = "Semantic"
-        if total_map["tong_thue"] == 0:
-            total_map["tong_thue"] = total_map["thue_gtgt"] + total_map["thue_tndn"]
-        return total_map
-
-    # --- ƯU TIÊN 2: Thẻ đánh số ctN / tong_ctN theo đúng số cột thực tế trên XML (M13 chuẩn 13 cột vs M14 14 cột) ---
-    schema = detect_ntnn_schema(root, ma_tkhai=ma_tkhai, mo_ta_bmau=mo_ta_bmau, ten_tkhai=ten_tkhai, year=year)
-    total_map["schema"] = schema
-
-    if schema == "M14":
-        tot_dt_chua = {"tong_ct5", "tong_ct05", "ct5_tong", "ct05_tong"}
-        tot_dt_g = {"tong_ct7", "tong_ct07", "ct7_tong", "ct07_tong"}
-        tot_th_g = {"tong_ct9", "tong_ct09", "ct9_tong", "ct09_tong"}
-        tot_dt_t = {"tong_ct10", "ct10_tong"}
-        tot_th_t = {"tong_ct13", "ct13_tong"}
-        tot_all = {"tong_ct14", "ct14_tong"}
-        row_dt_chua = {"ct5", "ct05", "ct_5"}
-        row_dt_g = {"ct7", "ct07", "ct_7"}
-        row_th_g = {"ct9", "ct09", "ct_9"}
-        row_dt_t = {"ct10", "ct_10"}
-        row_th_t = {"ct13", "ct_13"}
-        row_all = {"ct14", "ct_14"}
-    else:  # M13 (Chuẩn 13 cột gốc 01/NTNN: ct4=DT chưa gồm GTGT, ct6=DT GTGT, ct8=Thuế GTGT, ct9=DT TNDN, ct12=Thuế TNDN, ct13=Tổng thuế)
-        tot_dt_chua = {"tong_ct4", "tong_ct04", "ct4_tong", "ct04_tong"}
-        tot_dt_g = {"tong_ct6", "tong_ct06", "ct6_tong", "ct06_tong"}
-        tot_th_g = {"tong_ct8", "tong_ct08", "ct8_tong", "ct08_tong"}
-        tot_dt_t = {"tong_ct9", "tong_ct09", "ct9_tong", "ct09_tong"}
-        tot_th_t = {"tong_ct12", "ct12_tong"}
-        tot_all = {"tong_ct13", "ct13_tong"}
-        row_dt_chua = {"ct4", "ct04", "ct_4"}
-        row_dt_g = {"ct6", "ct06", "ct_6"}
-        row_th_g = {"ct8", "ct08", "ct_8"}
-        row_dt_t = {"ct9", "ct09", "ct_9"}
-        row_th_t = {"ct12", "ct_12"}
-        row_all = {"ct13", "ct_13"}
-
-    # Đọc thẻ tổng cộng của bảng trước
-    for el in _iter_non_khbs(scan_root):
-        if len(el) > 0 or not el.text or not el.text.strip():
-            continue
-        t = _strip_ns(el.tag).lower()
-        v = _to_float(el.text)
-        if v == 0:
-            continue
-        if t in tot_dt_chua and total_map["dt_chua_gtgt"] == 0:
-            total_map["dt_chua_gtgt"] = v
-        elif t in tot_dt_g and total_map["dt_gtgt"] == 0:
-            total_map["dt_gtgt"] = v
-        elif t in tot_th_g and total_map["thue_gtgt"] == 0:
-            total_map["thue_gtgt"] = v
-        elif t in tot_dt_t and total_map["dt_tndn"] == 0:
-            total_map["dt_tndn"] = v
-        elif t in tot_th_t and total_map["thue_tndn"] == 0:
-            total_map["thue_tndn"] = v
-        elif t in tot_all and total_map["tong_thue"] == 0:
-            total_map["tong_thue"] = v
-
-    # Nếu không có thẻ tong_ct* thì cộng dồn từ các dòng chi tiết theo đúng chuẩn cột
-    if not any(total_map[k] != 0 for k in ("dt_chua_gtgt", "dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
-        for el in _iter_non_khbs(scan_root):
-            children = list(el)
-            if not children:
-                continue
-            child_vals = {
-                _strip_ns(ch.tag).lower(): _to_float(ch.text)
-                for ch in children
-                if len(ch) == 0 and ch.text and ch.text.strip()
-            }
-            if not child_vals:
-                continue
-            if any(k in child_vals for k in row_dt_chua | row_dt_g | row_th_g | row_dt_t | row_th_t):
-                for k in row_dt_chua:
-                    if k in child_vals:
-                        total_map["dt_chua_gtgt"] += child_vals[k]
-                        break
-                for k in row_dt_g:
-                    if k in child_vals:
-                        total_map["dt_gtgt"] += child_vals[k]
-                        break
-                for k in row_th_g:
-                    if k in child_vals:
-                        total_map["thue_gtgt"] += child_vals[k]
-                        break
-                for k in row_dt_t:
-                    if k in child_vals:
-                        total_map["dt_tndn"] += child_vals[k]
-                        break
-                for k in row_th_t:
-                    if k in child_vals:
-                        total_map["thue_tndn"] += child_vals[k]
-                        break
-                for k in row_all:
-                    if k in child_vals:
-                        total_map["tong_thue"] += child_vals[k]
-                        break
-
-    if total_map["tong_thue"] == 0:
-        total_map["tong_thue"] = total_map["thue_gtgt"] + total_map["thue_tndn"]
-
-    return total_map
+def _flatten_row_leaves(row_el: ET.Element) -> Dict[str, str]:
+    """Làm phẳng toàn bộ thẻ lá con cháu trong 1 dòng <ThueNTNN> (kể cả lồng trong <ThueGTGT>, <ThueTNDN>)."""
+    cmap: Dict[str, str] = {}
+    for el in row_el.iter():
+        if len(el) == 0 and el.text and el.text.strip():
+            t = _strip_ns(el.tag).lower()
+            if t not in cmap:
+                cmap[t] = el.text.strip()
+    return cmap
 
 
 def extract_ntnn_contract_rows_from_xml_root(
@@ -331,8 +132,9 @@ def extract_ntnn_contract_rows_from_xml_root(
     year: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Bóc tách CHI TIẾT TỪNG DÒNG HỢP ĐỒNG / NHÀ THẦU trên tờ khai Thuế Nhà Thầu (01/NTNN...)
-    theo đúng chuẩn mẫu từng thời kỳ (TT103/2014 vs TT80/2021 vs thẻ ngữ nghĩa) để đưa lên sheet 'So Thue NTNN TH'.
+    Bóc tách NGUYÊN BẢN CHI TIẾT TỪNG DÒNG HỢP ĐỒNG / NHÀ THẦU trên tờ khai 01/NTNN
+    (hỗ trợ trọn vẹn cấu trúc lồng <BKThueNTNN>/<ThueNTNN>/<ThueGTGT>+<ThueTNDN> chuẩn TCT/HTKK/TaxOnline,
+    cấu trúc phẳng M13_FLAT, M14_SHIFTED và thẻ ngữ nghĩa).
     """
     scan_root = _get_main_declaration_root(root)
     schema = detect_ntnn_schema(root, ma_tkhai=ma_tkhai, mo_ta_bmau=mo_ta_bmau, ten_tkhai=ten_tkhai, year=year)
@@ -349,7 +151,28 @@ def extract_ntnn_contract_rows_from_xml_root(
                 return _to_float(cmap[k])
         return 0.0
 
-    # Khóa nhận diện dòng chi tiết hợp đồng theo đúng mẫu 01/NTNN 13 cột (1)..(13) (và M14 nếu XML có ct14)
+    # 1. Tìm đúng các node dòng hợp đồng (ưu tiên <ThueNTNN> trong <BKThueNTNN>, hoặc <CTietTKhaiChinh>)
+    candidate_row_els: List[ET.Element] = []
+    for el in _iter_non_khbs(scan_root):
+        t = _strip_ns(el.tag).lower()
+        if t in ("thuentnn", "ctiettkhaichinh", "chitiet", "row", "dong"):
+            candidate_row_els.append(el)
+
+    # Nếu XML dùng tên node lặp khác -> tự dò các node chứa đồng thời thẻ ct* (không chứa tong_ct* và không phải node con ThueGTGT/ThueTNDN)
+    if not candidate_row_els:
+        for el in _iter_non_khbs(scan_root):
+            t = _strip_ns(el.tag).lower()
+            if t in ("ctieutkhaichinh", "bkthuentnn", "thuegtgt", "thuetndn"):
+                continue
+            children = list(el)
+            if not children:
+                continue
+            cmap_direct = {_strip_ns(ch.tag).lower() for ch in children if len(ch) == 0}
+            if any(k.startswith("tong_") or k.endswith("_tong") for k in cmap_direct):
+                continue
+            if any(k in cmap_direct for k in ("ct1", "ct4", "ct6", "ct7", "ct9", "ct10", "ct12", "ct13", "ct14", "dthutinhthuegtgt", "dthutinhthuetndn")):
+                candidate_row_els.append(el)
+
     sem_fin_keys = {
         "doanhthuchuagomgtgt", "dthuchuagtgt", "dthuchuabaogomthuegtgt",
         "dthutinhthuegtgt", "doanhthutinhthuegtgt", "doanhthugtgt",
@@ -357,28 +180,16 @@ def extract_ntnn_contract_rows_from_xml_root(
         "dthutinhthuetndn", "doanhthutinhthuetndn", "doanhthutndn",
         "thuetndnpnop", "thuetndnphainop", "sothuetndn",
     }
-    m14_fin_keys = {"ct7", "ct07", "ct_7", "ct9", "ct09", "ct_9", "ct10", "ct_10", "ct13", "ct_13", "ct14", "ct_14"}
-    m13_fin_keys = {"ct4", "ct04", "ct_4", "ct6", "ct06", "ct_6", "ct8", "ct08", "ct_8", "ct9", "ct09", "ct_9", "ct12", "ct_12", "ct13", "ct_13"}
 
     rows: List[Dict[str, Any]] = []
-    for el in _iter_non_khbs(scan_root):
-        children = list(el)
-        if not children:
-            continue
-        cmap: Dict[str, str] = {}
-        for ch in children:
-            if len(ch) == 0 and ch.text and ch.text.strip():
-                cmap[_strip_ns(ch.tag).lower()] = ch.text.strip()
+    for row_el in candidate_row_els:
+        cmap = _flatten_row_leaves(row_el)
         if not cmap:
             continue
         if any(k.startswith("tong_") or k.endswith("_tong") for k in cmap.keys()):
             continue
 
         is_sem = any(k in cmap for k in sem_fin_keys)
-        is_num_row = any(k in cmap for k in (m14_fin_keys if schema == "M14" else m13_fin_keys))
-        if not is_sem and not is_num_row:
-            continue
-
         if is_sem:
             noi_dung = _pick_str(cmap, ("noidung", "tennhathau", "tenhhdv", "ct1", "ct01", "ct1a", "ct1b"))
             mst_nt = _pick_str(cmap, ("mstnhathau", "mstntnn", "mst_ntnn", "ct2", "ct02"))
@@ -394,7 +205,26 @@ def extract_ntnn_contract_rows_from_xml_root(
             th_t = _pick_num(cmap, ("thuetndnpnop", "thuetndnphainop", "sothuetndn", "thuetndn"))
             tot = _pick_num(cmap, ("tongthuepnop", "tongthuephainop", "tongsothuepnop"))
             row_schema = "Semantic"
-        elif schema == "M14":
+        elif schema == "TCT_NESTED":
+            # Chuẩn XML chính thức TCT/HTKK/TaxOnline:
+            # ct1=Nội dung, ct2=MST, ct3=Hợp đồng, ct4=DT chưa gồm GTGT, ct5=Ngày thanh toán,
+            # ThueGTGT: ct6=DT GTGT, ct7=Tỷ lệ GTGT, ct8=nil, ct9=Thuế GTGT,
+            # ThueTNDN: ct10=DT TNDN, ct11=Tỷ lệ TNDN, ct12=Miễn giảm, ct13=Thuế TNDN, ct14=Tổng thuế
+            noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct1a", "ct1b", "noidung"))
+            mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "mstnhathau"))
+            hop_dong = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong"))
+            dt_chua = _pick_num(cmap, ("ct4", "ct04", "ct_4"))
+            ngay_tt = _pick_str(cmap, ("ct5", "ct05", "ct_5", "ngaythanhtoan"))
+            dt_g = _pick_num(cmap, ("ct6", "ct06", "ct_6"))
+            tl_g = _pick_num(cmap, ("ct7", "ct07", "ct_7"))
+            th_g = _pick_num(cmap, ("ct9", "ct09", "ct_9"))
+            dt_t = _pick_num(cmap, ("ct10", "ct_10"))
+            tl_t = _pick_num(cmap, ("ct11", "ct_11"))
+            mg_t = _pick_num(cmap, ("ct12", "ct_12"))
+            th_t = _pick_num(cmap, ("ct13", "ct_13"))
+            tot = _pick_num(cmap, ("ct14", "ct_14"))
+            row_schema = "TCT_NESTED"
+        elif schema == "M14_SHIFTED":
             noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct2", "ct02", "noidung"))
             mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "ct3", "ct03", "mstnhathau"))
             so_hd = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong"))
@@ -410,11 +240,11 @@ def extract_ntnn_contract_rows_from_xml_root(
             mg_t = _pick_num(cmap, ("ct12", "ct_12"))
             th_t = _pick_num(cmap, ("ct13", "ct_13"))
             tot = _pick_num(cmap, ("ct14", "ct_14"))
-            row_schema = "M14"
-        else:  # M13 (Chuẩn 13 cột gốc 01/NTNN đúng y ảnh mẫu: (1)..(13))
-            noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct1a", "ct1b", "noidung", "tennhathau"))
-            mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "mstnhathau", "mstntnn"))
-            hop_dong = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong", "hopdong"))
+            row_schema = "M14_SHIFTED"
+        else:  # M13_FLAT
+            noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct1a", "ct1b", "noidung"))
+            mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "mstnhathau"))
+            hop_dong = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong"))
             dt_chua = _pick_num(cmap, ("ct4", "ct04", "ct_4"))
             ngay_tt = _pick_str(cmap, ("ct5", "ct05", "ct_5", "ngaythanhtoan"))
             dt_g = _pick_num(cmap, ("ct6", "ct06", "ct_6"))
@@ -425,7 +255,7 @@ def extract_ntnn_contract_rows_from_xml_root(
             mg_t = _pick_num(cmap, ("ct11", "ct_11"))
             th_t = _pick_num(cmap, ("ct12", "ct_12"))
             tot = _pick_num(cmap, ("ct13", "ct_13"))
-            row_schema = "M13"
+            row_schema = "M13_FLAT"
 
         if dt_chua == 0 and dt_g == 0 and th_g == 0 and dt_t == 0 and th_t == 0 and not noi_dung and not hop_dong:
             continue
@@ -449,6 +279,97 @@ def extract_ntnn_contract_rows_from_xml_root(
         })
 
     return rows
+
+
+def extract_ntnn_totals_from_xml_root(
+    root: ET.Element,
+    ma_tkhai: str = "",
+    mo_ta_bmau: str = "",
+    ten_tkhai: str = "",
+    year: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Trích xuất chính xác các chỉ tiêu tổng cộng của tờ khai 01/NTNN:
+    - Ưu tiên đọc thẻ tổng cộng (tong_ct6, tong_ct9, tong_ct10, tong_ct13, tong_ct14)
+      và cộng chính xác dt_chua_gtgt (ct4) từ các dòng hợp đồng <ThueNTNN> (vì XML TCT không có thẻ tong_ct4).
+    """
+    scan_root = _get_main_declaration_root(root)
+    schema = detect_ntnn_schema(root, ma_tkhai=ma_tkhai, mo_ta_bmau=mo_ta_bmau, ten_tkhai=ten_tkhai, year=year)
+    contract_rows = extract_ntnn_contract_rows_from_xml_root(
+        root, ma_tkhai=ma_tkhai, mo_ta_bmau=mo_ta_bmau, ten_tkhai=ten_tkhai, year=year
+    )
+
+    total_map: Dict[str, Any] = {
+        "dt_chua_gtgt": 0.0,
+        "dt_gtgt": 0.0,
+        "thue_gtgt": 0.0,
+        "dt_tndn": 0.0,
+        "thue_tndn": 0.0,
+        "tong_thue": 0.0,
+        "schema": contract_rows[0]["schema"] if contract_rows else schema,
+    }
+
+    if schema == "TCT_NESTED":
+        tot_dt_chua = {"tong_ct4", "tong_ct04", "ct4_tong", "tongdoanhthuchuagomgtgt"}
+        tot_dt_g = {"tong_ct6", "tong_ct06", "ct6_tong", "tongdoanhthugtgt", "tongdthutinhthuegtgt"}
+        tot_th_g = {"tong_ct9", "tong_ct09", "ct9_tong", "tongthuegtgt", "tongthuegtgtpnop"}
+        tot_dt_t = {"tong_ct10", "ct10_tong", "tongdoanhthutndn", "tongdthutinhthuetndn"}
+        tot_th_t = {"tong_ct13", "ct13_tong", "tongthuetndn", "tongthuetndnpnop"}
+        tot_all = {"tong_ct14", "ct14_tong", "tongthuepnop", "tongthuephainop", "tongcong"}
+    elif schema == "M14_SHIFTED":
+        tot_dt_chua = {"tong_ct5", "tong_ct05", "ct5_tong", "tongdoanhthuchuagomgtgt"}
+        tot_dt_g = {"tong_ct7", "tong_ct07", "ct7_tong", "tongdoanhthugtgt", "tongdthutinhthuegtgt"}
+        tot_th_g = {"tong_ct9", "tong_ct09", "ct9_tong", "tongthuegtgt", "tongthuegtgtpnop"}
+        tot_dt_t = {"tong_ct10", "ct10_tong", "tongdoanhthutndn", "tongdthutinhthuetndn"}
+        tot_th_t = {"tong_ct13", "ct13_tong", "tongthuetndn", "tongthuetndnpnop"}
+        tot_all = {"tong_ct14", "ct14_tong", "tongthuepnop", "tongthuephainop", "tongcong"}
+    else:  # M13_FLAT
+        tot_dt_chua = {"tong_ct4", "tong_ct04", "ct4_tong", "tongdoanhthuchuagomgtgt"}
+        tot_dt_g = {"tong_ct6", "tong_ct06", "ct6_tong", "tongdoanhthugtgt", "tongdthutinhthuegtgt"}
+        tot_th_g = {"tong_ct8", "tong_ct08", "ct8_tong", "tongthuegtgt", "tongthuegtgtpnop"}
+        tot_dt_t = {"tong_ct9", "tong_ct09", "ct9_tong", "tongdoanhthutndn", "tongdthutinhthuetndn"}
+        tot_th_t = {"tong_ct12", "ct12_tong", "tongthuetndn", "tongthuetndnpnop"}
+        tot_all = {"tong_ct13", "ct13_tong", "tongthuepnop", "tongthuephainop", "tongcong"}
+
+    for el in _iter_non_khbs(scan_root):
+        if len(el) > 0 or not el.text or not el.text.strip():
+            continue
+        t = _strip_ns(el.tag).lower()
+        v = _to_float(el.text)
+        if v == 0:
+            continue
+        if t in tot_dt_chua and total_map["dt_chua_gtgt"] == 0:
+            total_map["dt_chua_gtgt"] = v
+        elif t in tot_dt_g and total_map["dt_gtgt"] == 0:
+            total_map["dt_gtgt"] = v
+        elif t in tot_th_g and total_map["thue_gtgt"] == 0:
+            total_map["thue_gtgt"] = v
+        elif t in tot_dt_t and total_map["dt_tndn"] == 0:
+            total_map["dt_tndn"] = v
+        elif t in tot_th_t and total_map["thue_tndn"] == 0:
+            total_map["thue_tndn"] = v
+        elif t in tot_all and total_map["tong_thue"] == 0:
+            total_map["tong_thue"] = v
+
+    # Cộng từ các dòng chi tiết hợp đồng cho mọi chỉ tiêu chưa có thẻ tong_ct* (đặc biệt là dt_chua_gtgt / ct4!)
+    if contract_rows:
+        if total_map["dt_chua_gtgt"] == 0:
+            total_map["dt_chua_gtgt"] = sum(r["dt_chua_gtgt"] for r in contract_rows)
+        if total_map["dt_gtgt"] == 0:
+            total_map["dt_gtgt"] = sum(r["dt_gtgt"] for r in contract_rows)
+        if total_map["thue_gtgt"] == 0:
+            total_map["thue_gtgt"] = sum(r["thue_gtgt"] for r in contract_rows)
+        if total_map["dt_tndn"] == 0:
+            total_map["dt_tndn"] = sum(r["dt_tndn"] for r in contract_rows)
+        if total_map["thue_tndn"] == 0:
+            total_map["thue_tndn"] = sum(r["thue_tndn"] for r in contract_rows)
+        if total_map["tong_thue"] == 0:
+            total_map["tong_thue"] = sum(r["tong_thue"] for r in contract_rows)
+
+    if total_map["tong_thue"] == 0:
+        total_map["tong_thue"] = total_map["thue_gtgt"] + total_map["thue_tndn"]
+
+    return total_map
 
 
 def get_ntnn_metrics(d: TaxDeclaration) -> Dict[str, Any]:

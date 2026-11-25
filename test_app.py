@@ -1107,15 +1107,15 @@ class TestTaxXmlToExcel(unittest.TestCase):
                     f.write(content)
 
             decls = [parse_tax_xml(p) for p in (p1, p2, p3)]
-            # Kiểm tra nhận diện chính xác M13 (13 cột gốc ct1..ct13) vs M14 (14 cột nếu có ct14)
+            # Kiểm tra nhận diện chính xác M13_FLAT vs M14_SHIFTED
             self.assertEqual(decls[0].tax_type, "NTNN")
-            self.assertEqual(decls[0].indicators["_ntnn_schema"], "M13")
+            self.assertEqual(decls[0].indicators["_ntnn_schema"], "M13_FLAT")
             self.assertEqual(round(decls[0].indicators["_ntnn_dt_gtgt"]), 105_263_158)
             self.assertEqual(round(decls[0].indicators["_ntnn_thue_gtgt"]), 5_263_158)
             self.assertEqual(round(decls[0].indicators["_ntnn_dt_tndn"]), 100_000_000)
             self.assertEqual(round(decls[0].indicators["_ntnn_thue_tndn"]), 5_000_000)
 
-            self.assertEqual(decls[2].indicators["_ntnn_schema"], "M14")
+            self.assertEqual(decls[2].indicators["_ntnn_schema"], "M14_SHIFTED")
             self.assertEqual(round(decls[2].indicators["_ntnn_dt_gtgt"]), 315_789_474)
             self.assertEqual(round(decls[2].indicators["_ntnn_thue_gtgt"]), 15_789_474)
             self.assertEqual(round(decls[2].indicators["_ntnn_dt_tndn"]), 300_000_000)
@@ -1741,6 +1741,103 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(kept_kys.count("03/2021"), 1)
             self.assertEqual(kept_kys.count("06/2024"), 1)
             self.assertEqual(kept_kys.count("07/2024"), 1)
+
+    def test_v16_ntnn_official_tct_nested_xml_structure(self) -> None:
+        """Kiểm thử v1.6: Đọc chính xác 100% cấu trúc XML chuẩn TCT (<BKThueNTNN>/<ThueNTNN> lồng <ThueGTGT>+<ThueTNDN>, ct8=nil, không có tong_ct4)."""
+        from excel_exporter import export_to_excel
+        from tax_parser import parse_tax_xml
+
+        # Dữ liệu giả lập ẩn danh 100% theo đúng cấu trúc thẻ XML chuẩn Tổng cục Thuế (maTKhai=41)
+        xml_tct_nested = """<?xml version="1.0" encoding="UTF-8"?>
+<HSoThueDTu xmlns="http://kekhaithue.gdt.gov.vn/TKhaiThue" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <HSoKhaiThue>
+    <TTinChung>
+      <TTinTKhaiThue>
+        <TKhaiThue>
+          <maTKhai>41</maTKhai>
+          <tenTKhai>Tờ khai thuế nhà thầu (01/NTNN) (Kỳ 15/06/2023)</tenTKhai>
+          <moTaBMau>Ban hành kèm theo Thông tư số 103/2014/TT-BTC</moTaBMau>
+          <loaiTKhai>C</loaiTKhai>
+          <soLan>0</soLan>
+          <KyKKhaiThue>
+            <kieuKy>D</kieuKy>
+            <kyKKhai>15/06/2023</kyKKhai>
+            <kyKKhaiTuNgay>15/06/2023</kyKKhaiTuNgay>
+            <kyKKhaiDenNgay>15/06/2023</kyKKhaiDenNgay>
+          </KyKKhaiThue>
+          <ngayLapTKhai>2023-06-15</ngayLapTKhai>
+        </TKhaiThue>
+        <NNT>
+          <mst>0100000077</mst>
+          <tenNNT>Cong ty Mau F</tenNNT>
+        </NNT>
+      </TTinTKhaiThue>
+    </TTinChung>
+    <CTieuTKhaiChinh>
+      <BKThueNTNN>
+        <ThueNTNN id="ID_1">
+          <ct1>Dich vu lai tien vay (Nha thau Mau Z)</ct1>
+          <ct2>0100000077</ct2>
+          <ct3>HD-TEST-01</ct3>
+          <ct4>500000000</ct4>
+          <ct5>2023-06-10</ct5>
+          <ThueGTGT>
+            <ct6>0</ct6>
+            <ct7>0</ct7>
+            <ct8 xsi:nil="true"/>
+            <ct9>0</ct9>
+          </ThueGTGT>
+          <ThueTNDN>
+            <ct10>500000000</ct10>
+            <ct11>5</ct11>
+            <ct12>0</ct12>
+            <ct13>25000000</ct13>
+          </ThueTNDN>
+          <ct14>25000000</ct14>
+        </ThueNTNN>
+      </BKThueNTNN>
+      <tong_ct6>0</tong_ct6>
+      <tong_ct9>0</tong_ct9>
+      <tong_ct10>500000000</tong_ct10>
+      <tong_ct12>0</tong_ct12>
+      <tong_ct13>25000000</tong_ct13>
+      <tong_ct14>25000000</tong_ct14>
+    </CTieuTKhaiChinh>
+  </HSoKhaiThue>
+</HSoThueDTu>"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = os.path.join(tmpdir, "tct_nested.xml")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(xml_tct_nested)
+            d = parse_tax_xml(p)
+            self.assertEqual(d.tax_type, "NTNN")
+            self.assertEqual(d.indicators["_ntnn_schema"], "TCT_NESTED")
+            # Không có tong_ct4 -> phải tự cộng chính xác từ <ThueNTNN>/<ct4> = 500,000,000!
+            self.assertEqual(round(d.indicators["_ntnn_dt_chua_gtgt"]), 500_000_000)
+            self.assertEqual(round(d.indicators["_ntnn_dt_gtgt"]), 0)
+            self.assertEqual(round(d.indicators["_ntnn_thue_gtgt"]), 0)
+            self.assertEqual(round(d.indicators["_ntnn_dt_tndn"]), 500_000_000)
+            self.assertEqual(round(d.indicators["_ntnn_thue_tndn"]), 25_000_000)
+            self.assertEqual(round(d.indicators["_ntnn_tong_thue"]), 25_000_000)
+
+            out_x = os.path.join(tmpdir, "out_nested.xlsx")
+            export_to_excel([d], out_x)
+            wb = openpyxl.load_workbook(out_x, data_only=False)
+            ws_th = wb["So Thue NTNN TH"]
+            # Chỉ đúng 1 dòng hợp đồng (row 2) + 1 dòng TỔNG CỘNG (row 3) — KHÔNG bị tách thành 3 dòng vỡ!
+            self.assertEqual(ws_th.max_row, 3)
+            self.assertEqual(ws_th.cell(2, 9).value, "Dich vu lai tien vay (Nha thau Mau Z)")
+            self.assertEqual(ws_th.cell(2, 10).value, "0100000077")
+            self.assertEqual(ws_th.cell(2, 11).value, "HD-TEST-01")
+            self.assertEqual(ws_th.cell(2, 12).value, 500_000_000)   # (4) DT chưa gồm GTGT
+            self.assertEqual(ws_th.cell(2, 13).value, "2023-06-10")  # (5) Ngày thanh toán
+            self.assertEqual(ws_th.cell(2, 14).value, 0)             # (6) DT GTGT
+            self.assertEqual(ws_th.cell(2, 16).value, 0)             # (8) Thuế GTGT
+            self.assertEqual(ws_th.cell(2, 17).value, 500_000_000)   # (9) DT TNDN
+            self.assertEqual(ws_th.cell(2, 18).value, 5)             # (10) Tỷ lệ TNDN (%)
+            self.assertEqual(ws_th.cell(2, 20).value, 25_000_000)    # (12) Thuế TNDN phải nộp
+            self.assertEqual(ws_th.cell(2, 21).value, 25_000_000)    # (13) Tổng thuế phải nộp NSNN
 
 
 if __name__ == "__main__":
