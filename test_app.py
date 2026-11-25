@@ -1651,7 +1651,8 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_th.cell(3, 12).value, 200_000_000)
             self.assertEqual(ws_th.cell(3, 18).value, 10)
             self.assertEqual(ws_th.cell(3, 20).value, 20_000_000)
-            self.assertEqual(ws_th.cell(4, 9).value, "TỔNG CỘNG")
+            self.assertIn("TỔNG CỘNG", str(ws_th.cell(4, 9).value))
+            self.assertIn('SUMIF($V$2:$V$3,"Hợp lệ"', str(ws_th.cell(4, 21).value))
 
     def test_v16_offset_fiscal_year_gtgt_opening_and_no_c2_tk_double_count(self) -> None:
         """Kiểm thử v1.6: Đơn vị lệch kỳ (01/04..31/03) lấy đầu kỳ GTGT trước tháng 4 nộp sang kỳ kiểm tra, và KHÔNG cộng trùng (+C2)+(+TK/QT)."""

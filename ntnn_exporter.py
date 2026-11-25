@@ -460,16 +460,36 @@ def is_ntnn_per_occurrence(d: TaxDeclaration) -> bool:
     return False
 
 
+def _normalize_ntnn_ky(d: TaxDeclaration) -> str:
+    """Chuẩn hóa kỳ kê khai NTNN để nhận diện trùng chính xác bất kể khác định dạng ('6/2024' vs '06/2024', 'D/11/01/2016' vs '11/01/2016')."""
+    if is_ntnn_per_occurrence(d) and d.tu_ngay:
+        return d.tu_ngay.strftime("%Y-%m-%d")
+    s = (d.ky_kkhai or "").strip().upper()
+    m_d = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](20\d{2})", s)
+    if m_d:
+        return f"{int(m_d.group(3)):04d}-{int(m_d.group(2)):02d}-{int(m_d.group(1)):02d}"
+    m_m = re.match(r"^T?(0?[1-9]|1[0-2])[/-](20\d{2})$", s)
+    if m_m:
+        return f"{int(m_m.group(1)):02d}/{m_m.group(2)}"
+    m_q = re.match(r"^Q([1-4])[/-](20\d{2})$", s)
+    if m_q:
+        return f"Q{m_q.group(1)}/{m_q.group(2)}"
+    if d.tu_ngay:
+        return d.tu_ngay.strftime("%m/%Y")
+    return s
+
+
 def _ntnn_content_fingerprint(d: TaxDeclaration) -> Tuple[Any, ...]:
     """
     Khóa nhận diện 2 tờ khai NTNN trùng y như nhau (bất kể nằm ở thư mục MST công ty chính
-    hay thư mục MST nhà thầu riêng, bất kể tên file khác nhau):
-    cùng kỳ kê khai + cùng số Doanh thu GTGT, Thuế GTGT, Doanh thu TNDN, Thuế TNDN.
+    hay thư mục MST nhà thầu riêng, bất kể tên file hay cách ghi kỳ khác nhau):
+    cùng kỳ kê khai chuẩn hóa + cùng Doanh thu chưa gồm GTGT, DT GTGT, Thuế GTGT, DT TNDN, Thuế TNDN.
     """
     m = get_ntnn_metrics(d)
-    ky_norm = (d.ky_kkhai or "").strip().upper() or (d.tu_ngay.strftime("%d/%m/%Y") if d.tu_ngay else "")
+    ky_norm = _normalize_ntnn_ky(d)
     return (
         ky_norm,
+        round(m["dt_chua_gtgt"]),
         round(m["dt_gtgt"]),
         round(m["thue_gtgt"]),
         round(m["dt_tndn"]),
@@ -517,7 +537,7 @@ def filter_latest_ntnn_declarations(declarations: List[TaxDeclaration]) -> List[
         if is_ntnn_per_occurrence(d):
             per_occurrence_list.append(d)
         else:
-            ky_key = (d.ky_kkhai or "").strip().upper() or (d.tu_ngay.strftime("%m/%Y") if d.tu_ngay else "")
+            ky_key = _normalize_ntnn_ky(d)
             periodic_grouped.setdefault((d.mst or "", ky_key), []).append(d)
 
     result: List[TaxDeclaration] = list(per_occurrence_list)
@@ -819,14 +839,15 @@ def write_ntnn_timeline_sheet(
 
     if stt > 0:
         r_end = cur_r - 1
-        ws.cell(cur_r, 9, "TỔNG CỘNG").alignment = al_c
+        status_col_l = get_column_letter(status_col)
+        ws.cell(cur_r, 9, "TỔNG CỘNG (không tính tờ khai trùng)").alignment = al_c
         for ci in sum_cols:
             col_l = get_column_letter(ci)
-            c = ws.cell(cur_r, ci, f"=SUM({col_l}2:{col_l}{r_end})")
+            c = ws.cell(cur_r, ci, f'=SUMIF(${status_col_l}$2:${status_col_l}${r_end},"Hợp lệ",{col_l}2:{col_l}{r_end})')
             c.number_format = "#,##0"
             c.alignment = al_r
         if dup_in_sheet:
-            ws.cell(cur_r, status_col, f"Có {dup_in_sheet} tờ khai trùng (đã tự loại khỏi So Thue NTNN Cuoi)").alignment = al_l
+            ws.cell(cur_r, status_col, f"Có {dup_in_sheet} tờ khai trùng (KHÔNG cộng vào Tổng cộng & đã loại khỏi So Thue NTNN Cuoi)").alignment = al_l
         for ci in range(1, total_cols + 1):
             c = ws.cell(cur_r, ci)
             c.font = f_bold
