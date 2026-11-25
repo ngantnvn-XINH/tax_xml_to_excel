@@ -57,6 +57,92 @@ def extract_ky_year(ky_val: Any, ngay_ht: Optional[datetime.datetime] = None) ->
     return None
 
 
+def extract_ky_fiscal_year(
+    ky_val: Any,
+    ngay_ht: Optional[datetime.datetime] = None,
+    fiscal_start_month: int = 1,
+) -> Optional[int]:
+    """
+    Trích xuất NĂM TÀI CHÍNH của Kỳ báo cáo khi doanh nghiệp lệch kỳ (VD fiscal_start_month=4: 04/YYYY..03/(YYYY+1)):
+    - Nếu fiscal_start_month <= 1: giống hệt extract_ky_year.
+    - Nếu fiscal_start_month == 4:
+        * '2001', '2002', '2003' (T1..T3/2020) -> năm tài chính 2019 (kỳ trước của năm 2020!)
+        * '2004'..'2012', '2101'..'2103'       -> năm tài chính 2020
+        * '20Q1' -> 2019; '20Q2'..'20Q4', '21Q1' -> 2020
+        * '20CN', '2020' -> 2020
+    """
+    if fiscal_start_month <= 1:
+        return extract_ky_year(ky_val, ngay_ht)
+    if ky_val is not None:
+        s = str(ky_val).strip().upper()
+        m_ym = re.match(r"^(\d{2})(0[1-9]|1[0-2])$", s)
+        if m_ym:
+            yr, mo = 2000 + int(m_ym.group(1)), int(m_ym.group(2))
+            return yr if mo >= fiscal_start_month else yr - 1
+        m_yq = re.match(r"^(\d{2})Q([1-4])$", s)
+        if m_yq:
+            yr, q = 2000 + int(m_yq.group(1)), int(m_yq.group(2))
+            q_mo = (q - 1) * 3 + 1
+            return yr if q_mo >= fiscal_start_month else yr - 1
+        m_mfull = re.match(r"^T?(0?[1-9]|1[0-2])[/-](20\d{2})$", s)
+        if m_mfull:
+            mo, yr = int(m_mfull.group(1)), int(m_mfull.group(2))
+            return yr if mo >= fiscal_start_month else yr - 1
+        m_qfull = re.match(r"^Q([1-4])[/-](20\d{2})$", s)
+        if m_qfull:
+            q, yr = int(m_qfull.group(1)), int(m_qfull.group(2))
+            q_mo = (q - 1) * 3 + 1
+            return yr if q_mo >= fiscal_start_month else yr - 1
+        m_cn = re.match(r"^(\d{2})CN$", s)
+        if m_cn:
+            return 2000 + int(m_cn.group(1))
+        m_full = re.search(r"(20\d{2})", s)
+        if m_full:
+            return int(m_full.group(1))
+    if ngay_ht:
+        return ngay_ht.year if ngay_ht.month >= fiscal_start_month else ngay_ht.year - 1
+    return None
+
+
+def detect_fiscal_start_month(wb: openpyxl.Workbook) -> int:
+    """
+    Tự động nhận diện tháng bắt đầu năm tài chính lệch kỳ từ sheet 'So Thue GTGT Cuoi (Lech ky)'
+    (VD: kỳ đầu tiên là '2004' hoặc '04/2020' -> trả về 4). Nếu năm dương lịch chuẩn -> trả về 1.
+    """
+    target_sheet = None
+    for s in wb.sheetnames:
+        if "lech ky" in s.strip().lower():
+            target_sheet = s
+            break
+    if not target_sheet:
+        return 1
+    ws = wb[target_sheet]
+    for r in range(3, min(ws.max_row + 1, 25)):
+        lbl_e = str(ws.cell(r, 5).value or "").strip().lower()
+        if "tổng cộng" in lbl_e:
+            continue
+        ky_raw = str(ws.cell(r, 7).value or "").strip().upper()
+        if not ky_raw:
+            continue
+        m_ym = re.match(r"^(\d{2})(0[1-9]|1[0-2])$", ky_raw)
+        if m_ym:
+            mo = int(m_ym.group(2))
+            return mo if 2 <= mo <= 12 else 1
+        m_mfull = re.match(r"^T?(0?[1-9]|1[0-2])[/-](20\d{2})$", ky_raw)
+        if m_mfull:
+            mo = int(m_mfull.group(1))
+            return mo if 2 <= mo <= 12 else 1
+        m_yq = re.match(r"^(\d{2})Q([1-4])$", ky_raw)
+        if m_yq:
+            mo = (int(m_yq.group(2)) - 1) * 3 + 1
+            return mo if 2 <= mo <= 12 else 1
+        m_qfull = re.match(r"^Q([1-4])[/-](20\d{2})$", ky_raw)
+        if m_qfull:
+            mo = (int(m_qfull.group(1)) - 1) * 3 + 1
+            return mo if 2 <= mo <= 12 else 1
+    return 1
+
+
 def _norm_header(val: Any) -> str:
     if val is None:
         return ""
@@ -220,13 +306,18 @@ TIEU_MUC_NAMES: Dict[str, str] = {
 }
 
 
-def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year: int) -> Dict[str, Any]:
+def compute_tq_metrics(
+    tq_rows: List[Dict[str, Any]],
+    start_year: int,
+    end_year: int,
+    fiscal_start_month: int = 1,
+) -> Dict[str, Any]:
     """
     Tính toán toàn bộ chỉ số từ dữ liệu TQ theo đúng chuẩn nghiệp vụ thanh tra - kiểm tra thuế:
-    - GTGT (1701): Phát sinh = TK theo Kỳ báo cáo; Đã nộp = C2 (+ HC nếu có) theo Năm Ngày hạch toán.
-    - TNDN (1052): Phát sinh = TK + QT theo Kỳ báo cáo; Đã nộp = C2 (+ HC nếu có) theo Năm Ngày hạch toán.
-    - TNCN (1001): Phát sinh = TK + TH + TQ theo Kỳ báo cáo; Đã nộp = C2 (+ HC nếu có) theo Năm Ngày hạch toán.
-    - Đầu kỳ năm start_year: Các khoản Kỳ báo cáo < start_year nhưng nộp/hạch toán trong start_year..end_year.
+    - Hỗ trợ đầy đủ năm tài chính lệch kỳ cho GTGT (fiscal_start_month > 1, VD tháng 4: 04/YYYY..03/(YYYY+1)):
+      các kỳ trước tháng bắt đầu năm tài chính (VD T1..T3 của start_year) được tính là KỲ TRƯỚC để lấy đúng số đầu kỳ GTGT!
+    - Số đầu kỳ (Cột C Biên bản QHNS): Tính ròng theo từng kỳ trước (< start_year) để C2 (âm) và TK/QT/TQ/TH (dương)
+      tự bù trừ đúng dấu, TUYỆT ĐỐI KHÔNG cộng trùng (+C2) + (+TK/QT).
     """
     years = list(range(start_year, end_year + 1))
     prev_year = start_year - 1
@@ -306,44 +397,63 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
         return val
 
     payment_gds = ("C2", "HC", "NT", "C5")
+    # Lưu chi tiết từng kỳ trước (< start_year) theo (tm, ky) để tính số đầu kỳ ròng chuẩn xác (KHÔNG cộng trùng C2 + TK/QT)
+    prior_periods: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     for item in tq_rows:
         tm = item["tm"]
         gd = item["gd"]
         ky = item["ky"]
-        ky_y = item["ky_year"]
-        ht_y = item["ht_year"]
         val = item["so_tien"]
+        ngay_ht_dt = item.get("ngay_ht")
+
+        # Với GTGT (1701) khi doanh nghiệp lệch kỳ (VD bắt đầu tháng 4):
+        # quy đổi cả ky_y và ht_y sang Năm tài chính lệch kỳ!
+        if tm == "1701" and fiscal_start_month > 1:
+            ky_y = extract_ky_fiscal_year(ky, ngay_ht_dt, fiscal_start_month)
+            if ngay_ht_dt is not None:
+                ht_y = ngay_ht_dt.year if ngay_ht_dt.month >= fiscal_start_month else ngay_ht_dt.year - 1
+            else:
+                ht_y = item["ht_year"]
+        else:
+            ky_y = item["ky_year"]
+            ht_y = item["ht_year"]
 
         # Bỏ qua bút toán bù trừ nội bộ (BT) vì mỗi cặp BT luôn tự triệt tiêu về 0
         if gd == "BT":
             continue
 
-        # 1. Ghi nhận số đầu kỳ Biên bản: TẤT CẢ số nộp (C2/HC/NT) & QT của mọi kỳ trước (< start_year) nộp/hạch toán trong kỳ kiểm tra
-        if ky_y is not None and ky_y < start_year and start_year <= ht_y <= end_year:
-            if tm == "1701":
-                if gd == "QT":
-                    metrics["dk_gtgt_qt_truoc"] += abs(val)
-                    metrics["dk_gtgt_qt_notes"].append(f"QT {ky_y} ({ky}) hạch toán năm {ht_y}")
-                elif gd in ("C2", "HC", "NT"):
-                    metrics["dk_gtgt_c2_prev"] += payment_amount(item)
-                    if ky and ky not in metrics["dk_gtgt_c2_notes"]:
-                        metrics["dk_gtgt_c2_notes"].append(ky)
-            elif tm == "1001":
-                if gd in ("C2", "HC", "NT"):
-                    metrics["dk_tncn_c2_prev"] += payment_amount(item)
-                    if ky and ky not in metrics["dk_tncn_c2_notes"]:
-                        metrics["dk_tncn_c2_notes"].append(ky)
-                elif gd in ("TQ", "TH", "PP") and ky == f"{prev_yy}CN":
-                    metrics["dk_tncn_qt_prev"] += ledger_signed_amount(item)
-                    if ky and ky not in metrics["dk_tncn_qt_notes"]:
-                        metrics["dk_tncn_qt_notes"].append(ky)
-            elif tm == "1052":
-                if gd == "QT":
-                    metrics["dk_tndn_h"] += abs(val)
-                elif gd in ("C2", "HC", "NT"):
-                    metrics["dk_tndn_i"] += payment_amount(item)
-            elif tm in LPMB_TMS and gd in ("TK", "TQ", "QT"):
+        # 1. Thu thập dữ liệu theo từng kỳ trước (< start_year) để tính đúng số đầu kỳ Biên bản (tránh cộng trùng C2 + TK/QT)
+        if ky_y is not None and ky_y < start_year:
+            if tm in ("1701", "1052", "1001"):
+                p_rec = prior_periods.setdefault(
+                    (tm, ky or str(ky_y)),
+                    {
+                        "ky_y": ky_y,
+                        "accrual_before": 0.0,
+                        "accrual_during": 0.0,
+                        "qt_during": 0.0,
+                        "pay_before": 0.0,
+                        "pay_during": 0.0,
+                        "qt_notes": [],
+                    },
+                )
+                if gd in payment_gds:
+                    p_amt_s = payment_amount(item)
+                    if ht_y < start_year:
+                        p_rec["pay_before"] += p_amt_s
+                    elif start_year <= ht_y <= end_year and gd in ("C2", "HC", "NT"):
+                        p_rec["pay_during"] += p_amt_s
+                else:
+                    l_amt = ledger_signed_amount(item)
+                    if ht_y < start_year:
+                        p_rec["accrual_before"] += l_amt
+                    elif start_year <= ht_y <= end_year:
+                        p_rec["accrual_during"] += l_amt
+                        if (tm in ("1701", "1052") and gd == "QT") or (tm == "1001" and gd in ("TQ", "TH", "PP")):
+                            p_rec["qt_during"] += l_amt
+                            p_rec["qt_notes"].append(f"{gd} {ky_y} ({ky}) hạch toán năm {ht_y}")
+            elif tm in LPMB_TMS and start_year <= ht_y <= end_year and gd in ("TK", "TQ", "QT"):
                 metrics["dk_lpmb_notes"].append(f"TM {tm} ({ky}): {val:,.0f}")
 
         # 2. Phát sinh theo Năm Kỳ báo cáo (Bucket A)
@@ -425,6 +535,50 @@ def compute_tq_metrics(tq_rows: List[Dict[str, Any]], start_year: int, end_year:
             else:
                 if (ky_y is not None and ky_y < start_year) or (ky_y is None and ht_y < start_year) or (ky_y in years and ht_y <= end_year):
                     metrics["opening_exact"][bucket_c_key] += ledger_signed_amount(item)
+
+    # Tổng hợp số đầu kỳ Biên bản ròng cho từng kỳ trước (< start_year):
+    # Nguyên tắc: C2 (âm trên TQ) và TK/QT/TQ/TH (dương trên TQ) bù trừ đúng dấu; KHÔNG cộng trùng (+C2) + (+TK/QT)!
+    for (tm, ky), rec in prior_periods.items():
+        if rec["pay_during"] == 0 and rec["accrual_during"] == 0:
+            continue
+        tot_accrual = rec["accrual_before"] + rec["accrual_during"]
+        if tot_accrual != 0:
+            # Số nghĩa vụ kỳ trước chuyển sang tại đầu kỳ kiểm tra = Tổng phát sinh kỳ trước - Số đã nộp trước kỳ kiểm tra
+            net_open = tot_accrual - rec["pay_before"]
+            if net_open <= 0:
+                continue
+            paid_part = min(max(0.0, rec["pay_during"]), net_open)
+            unpaid_part = max(0.0, net_open - paid_part)
+        else:
+            # Trường hợp Sổ TQ cũ không còn dòng TK gốc, chỉ còn chứng từ nộp C2 trong kỳ kiểm tra
+            if rec["pay_during"] > 0 and rec["pay_before"] == 0:
+                paid_part = rec["pay_during"]
+                unpaid_part = 0.0
+            else:
+                continue
+
+        if tm == "1701":
+            if paid_part > 0:
+                metrics["dk_gtgt_c2_prev"] += paid_part
+                if ky and ky not in metrics["dk_gtgt_c2_notes"]:
+                    metrics["dk_gtgt_c2_notes"].append(ky)
+            if unpaid_part > 0:
+                metrics["dk_gtgt_qt_truoc"] += unpaid_part
+                metrics["dk_gtgt_qt_notes"].extend(rec["qt_notes"] or [f"Kỳ {ky} còn phải nộp"])
+        elif tm == "1052":
+            if paid_part > 0:
+                metrics["dk_tndn_i"] += paid_part
+            if unpaid_part > 0:
+                metrics["dk_tndn_h"] += unpaid_part
+        elif tm == "1001":
+            if paid_part > 0:
+                metrics["dk_tncn_c2_prev"] += paid_part
+                if ky and ky not in metrics["dk_tncn_c2_notes"]:
+                    metrics["dk_tncn_c2_notes"].append(ky)
+            if unpaid_part > 0:
+                metrics["dk_tncn_qt_prev"] += unpaid_part
+                if ky and ky not in metrics["dk_tncn_qt_notes"]:
+                    metrics["dk_tncn_qt_notes"].append(ky)
 
     return metrics
 
@@ -790,6 +944,7 @@ def integrate_tq_and_qhns_into_workbook(
     cutoff_date: Optional[datetime.date] = None,
     tq_ntnn_excel_path: Optional[str] = None,
     target_cqt: Optional[str] = "7901",
+    fiscal_start_month: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Hàm tích hợp chính (hỗ trợ linh hoạt: chỉ có TQ công ty, chỉ có TQ_NTNN nhà thầu, hoặc cả 2):
@@ -852,7 +1007,8 @@ def integrate_tq_and_qhns_into_workbook(
         years = ht_years[-6:] if len(ht_years) > 6 else ht_years
 
     start_year, end_year = years[0], years[-1]
-    metrics = compute_tq_metrics(tq_rows, start_year, end_year)
+    eff_fiscal_month = fiscal_start_month if (fiscal_start_month is not None and 1 <= fiscal_start_month <= 12) else detect_fiscal_start_month(wb)
+    metrics = compute_tq_metrics(tq_rows, start_year, end_year, fiscal_start_month=eff_fiscal_month)
     decl_vals = _eval_year_sheet_values(excel_path, years)
 
     # Tính riêng phần TNCN phân bổ (PP, tiểu mục 1001) hạch toán tại các CQT khác để CỘNG vào số phát sinh TNCN (F90 & QHNS Cột 4)
