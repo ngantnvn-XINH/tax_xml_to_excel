@@ -2931,7 +2931,7 @@ def write_yearly_verification_sheets(
             95: (
                 1,
                 "Doanh thu tính thuế của nhà thầu nước ngoài ",
-                f"='{actual_ntnn_sheet}'!O{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
+                f"='{actual_ntnn_sheet}'!M{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
                 "=C95",
                 "=D95-C95",
             ),
@@ -2939,14 +2939,14 @@ def write_yearly_verification_sheets(
             97: (
                 "a",
                 "Thuế GTGT",
-                f"='{actual_ntnn_sheet}'!N{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
+                f"='{actual_ntnn_sheet}'!O{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
                 "=C97",
                 "=D97-C97",
             ),
             98: (
                 "b",
                 "Thuế TNDN ",
-                f"='{actual_ntnn_sheet}'!P{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
+                f"='{actual_ntnn_sheet}'!Q{ntnn_coords[yr]}" if (actual_ntnn_sheet and yr in ntnn_coords) else 0,
                 "=C98",
                 "=D98-C98",
             ),

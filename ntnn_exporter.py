@@ -88,84 +88,29 @@ def detect_ntnn_schema(
     year: Optional[int] = None,
 ) -> str:
     """
-    Nhận diện chuẩn mẫu tờ khai 01/NTNN để tránh lệch cột giữa TT103/2014 (ct6..ct13) và TT80/2021 (ct7..ct14).
-    Trả về: 'TT80' hoặc 'TT103'.
+    Nhận diện chuẩn cột thực tế của tờ khai 01/NTNN từ chính cấu trúc thẻ XML:
+    - 'M13' (Mặc định chuẩn 13 cột (1)..(13) của Mẫu 01/NTNN TT103 & TT80):
+        (1) Nội dung, (2) MST, (3) Hợp đồng số... ngày..., (4) Doanh thu chưa bao gồm thuế GTGT,
+        (5) Ngày thanh toán, (6) DT tính thuế GTGT, (7) Tỷ lệ GTGT, (8) Thuế GTGT phải nộp,
+        (9) DT tính thuế TNDN, (10) Tỷ lệ TNDN, (11) Miễn giảm HĐ, (12) Thuế TNDN phải nộp, (13) Tổng thuế NSNN.
+    - 'M14' (Chỉ dùng khi XML thực sự có cột ct14 / tong_ct14 hoặc ct6 là Ngày thanh toán):
+        (6) Ngày thanh toán, (7) DT GTGT, (8) Tỷ lệ GTGT, (9) Thuế GTGT, (10) DT TNDN, (11) Tỷ lệ TNDN,
+        (12) Miễn giảm HĐ, (13) Thuế TNDN, (14) Tổng thuế NSNN.
     """
     scan_root = _get_main_declaration_root(root)
-
-    # Tín hiệu 1: Có thẻ ct14 / tong_ct14 -> CHẮC CHẮN là TT80/2021 (TT103 chỉ có tối đa 13 cột)
     leaf_tags: Set[str] = set()
     ct6_is_date = False
-    ct6_num_max = 0.0
-    ct7_num_max = 0.0
-    tt103_math_hits = 0
-    tt80_math_hits = 0
 
     for el in _iter_non_khbs(scan_root):
         t = _strip_ns(el.tag).lower()
         if len(el) == 0:
             leaf_tags.add(t)
-            if t in ("ct6", "ct06", "ct_6") and el.text and el.text.strip():
-                if _looks_like_date(el.text):
-                    ct6_is_date = True
-                else:
-                    ct6_num_max = max(ct6_num_max, _to_float(el.text))
-            elif t in ("ct7", "ct07", "ct_7") and el.text and el.text.strip():
-                ct7_num_max = max(ct7_num_max, _to_float(el.text))
-        else:
-            child_map: Dict[str, str] = {
-                _strip_ns(ch.tag).lower(): (ch.text or "").strip()
-                for ch in el
-                if len(ch) == 0 and ch.text and ch.text.strip()
-            }
-            if not child_map:
-                continue
-            v6 = _to_float(child_map.get("ct6") or child_map.get("ct06") or child_map.get("ct_6"))
-            v7 = _to_float(child_map.get("ct7") or child_map.get("ct07") or child_map.get("ct_7"))
-            v8 = _to_float(child_map.get("ct8") or child_map.get("ct08") or child_map.get("ct_8"))
-            v9 = _to_float(child_map.get("ct9") or child_map.get("ct09") or child_map.get("ct_9"))
-            v12 = _to_float(child_map.get("ct12") or child_map.get("ct_12"))
-            v13 = _to_float(child_map.get("ct13") or child_map.get("ct_13"))
-            v14 = _to_float(child_map.get("ct14") or child_map.get("ct_14"))
+            if t in ("ct6", "ct06", "ct_6") and el.text and _looks_like_date(el.text):
+                ct6_is_date = True
 
-            # Kiểm tra toán học TT80: ct9 ≈ ct7*ct8/100 hoặc ct14 ≈ ct9+ct13
-            if v14 > 0 and abs(v14 - (v9 + v13)) <= max(10.0, v14 * 0.001):
-                tt80_math_hits += 2
-            if v7 > 100 and 0 < v8 <= 100 and v9 > 0 and abs(v9 - (v7 * v8 / 100.0)) <= max(10.0, v9 * 0.01):
-                tt80_math_hits += 1
-
-            # Kiểm tra toán học TT103: ct8 ≈ ct6*ct7/100 hoặc ct13 ≈ ct8+ct12 (khi không có ct14)
-            if v14 == 0 and v13 > 0 and (v8 > 0 or v12 > 0) and abs(v13 - (v8 + v12)) <= max(10.0, v13 * 0.001):
-                tt103_math_hits += 2
-            if v6 > 100 and 0 < v7 <= 100 and v8 > 0 and abs(v8 - (v6 * v7 / 100.0)) <= max(10.0, v8 * 0.01):
-                tt103_math_hits += 1
-
-    if any(t in leaf_tags for t in ("ct14", "ct_14", "tong_ct14", "ct14_tong")):
-        return "TT80"
-    if ct6_is_date:
-        return "TT80"
-
-    # Tín hiệu 2: Mô tả biểu mẫu / tên tờ khai trong <TKhaiThue>
-    meta = f"{mo_ta_bmau} {ten_tkhai}".upper()
-    if "80/2021" in meta or "TT80" in meta:
-        return "TT80"
-    if "103/2014" in meta or "156/2013" in meta or "TT103" in meta or "TT156" in meta:
-        return "TT103"
-
-    # Tín hiệu 3: Đối chiếu toán học tỷ lệ thuế và tổng cộng
-    if tt80_math_hits > tt103_math_hits:
-        return "TT80"
-    if tt103_math_hits > tt80_math_hits:
-        return "TT103"
-
-    # Tín hiệu 4: Đặc trưng giá trị ct6 vs ct7 (nếu ct6 > 100 còn ct7 <= 100 thì ct7 là tỷ lệ % của TT103)
-    if ct6_num_max > 100 and 0 < ct7_num_max <= 100:
-        return "TT103"
-
-    # Tín hiệu 5: Dự phòng theo năm tính thuế (TT80/2021 áp dụng từ kỳ 01/2022)
-    if year is not None and year <= 2021:
-        return "TT103"
-    return "TT80"
+    if any(t in leaf_tags for t in ("ct14", "ct_14", "tong_ct14", "ct14_tong")) or ct6_is_date:
+        return "M14"
+    return "M13"
 
 
 def extract_ntnn_totals_from_xml_root(
@@ -187,6 +132,7 @@ def extract_ntnn_totals_from_xml_root(
     """
     scan_root = _get_main_declaration_root(root)
     total_map: Dict[str, Any] = {
+        "dt_chua_gtgt": 0.0,
         "dt_gtgt": 0.0,
         "thue_gtgt": 0.0,
         "dt_tndn": 0.0,
@@ -196,6 +142,7 @@ def extract_ntnn_totals_from_xml_root(
     }
 
     # --- ƯU TIÊN 1: Thẻ có tên ngữ nghĩa rõ ràng (không bao giờ lệch giữa các thông tư) ---
+    sem_tot_dt_chua = {"tongdoanhthuchuagomgtgt", "tongdthuchuagtgt", "tong_dthu_chua_gtgt"}
     sem_tot_dt_g = {"tongdoanhthugtgt", "tongdthutinhthuegtgt", "tongdthugtgt", "tong_dthu_gtgt"}
     sem_tot_th_g = {"tongthuegtgt", "tongthuegtgtpnop", "tong_thue_gtgt", "tongthuegtgtphainop", "tongsothuegtgt"}
     sem_tot_dt_t = {"tongdoanhthutndn", "tongdthutinhthuetndn", "tongdthutndn", "tong_dthu_tndn"}
@@ -209,7 +156,9 @@ def extract_ntnn_totals_from_xml_root(
         v = _to_float(el.text)
         if v == 0:
             continue
-        if t in sem_tot_dt_g and total_map["dt_gtgt"] == 0:
+        if t in sem_tot_dt_chua and total_map["dt_chua_gtgt"] == 0:
+            total_map["dt_chua_gtgt"] = v
+        elif t in sem_tot_dt_g and total_map["dt_gtgt"] == 0:
             total_map["dt_gtgt"] = v
         elif t in sem_tot_th_g and total_map["thue_gtgt"] == 0:
             total_map["thue_gtgt"] = v
@@ -220,13 +169,14 @@ def extract_ntnn_totals_from_xml_root(
         elif t in sem_tot_all and total_map["tong_thue"] == 0:
             total_map["tong_thue"] = v
 
-    if any(total_map[k] != 0 for k in ("dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
+    if any(total_map[k] != 0 for k in ("dt_chua_gtgt", "dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
         total_map["schema"] = "Semantic"
         if total_map["tong_thue"] == 0:
             total_map["tong_thue"] = total_map["thue_gtgt"] + total_map["thue_tndn"]
         return total_map
 
     # Kiểm tra dòng chi tiết có thẻ ngữ nghĩa rõ ràng
+    sem_row_dt_chua = {"doanhthuchuagomgtgt", "dthuchuagtgt", "dthuchuabaogomthuegtgt"}
     sem_row_dt_g = {"dthutinhthuegtgt", "doanhthutinhthuegtgt", "doanhthugtgt"}
     sem_row_th_g = {"thuegtgtpnop", "thuegtgtphainop", "sothuegtgt", "thuegtgt"}
     sem_row_dt_t = {"dthutinhthuetndn", "doanhthutinhthuetndn", "doanhthutndn"}
@@ -244,7 +194,11 @@ def extract_ntnn_totals_from_xml_root(
         }
         if not child_vals:
             continue
-        if any(k in child_vals for k in sem_row_dt_g | sem_row_th_g | sem_row_dt_t | sem_row_th_t):
+        if any(k in child_vals for k in sem_row_dt_chua | sem_row_dt_g | sem_row_th_g | sem_row_dt_t | sem_row_th_t):
+            for k in sem_row_dt_chua:
+                if k in child_vals:
+                    total_map["dt_chua_gtgt"] += child_vals[k]
+                    break
             for k in sem_row_dt_g:
                 if k in child_vals:
                     total_map["dt_gtgt"] += child_vals[k]
@@ -266,38 +220,42 @@ def extract_ntnn_totals_from_xml_root(
                     total_map["tong_thue"] += child_vals[k]
                     break
 
-    if any(total_map[k] != 0 for k in ("dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
+    if any(total_map[k] != 0 for k in ("dt_chua_gtgt", "dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
         total_map["schema"] = "Semantic"
         if total_map["tong_thue"] == 0:
             total_map["tong_thue"] = total_map["thue_gtgt"] + total_map["thue_tndn"]
         return total_map
 
-    # --- ƯU TIÊN 2: Thẻ đánh số ctN / tong_ctN theo ĐÚNG chuẩn Thông tư (TT80 vs TT103) ---
+    # --- ƯU TIÊN 2: Thẻ đánh số ctN / tong_ctN theo đúng số cột thực tế trên XML (M13 chuẩn 13 cột vs M14 14 cột) ---
     schema = detect_ntnn_schema(root, ma_tkhai=ma_tkhai, mo_ta_bmau=mo_ta_bmau, ten_tkhai=ten_tkhai, year=year)
     total_map["schema"] = schema
 
-    if schema == "TT103":
-        tot_dt_g = {"tong_ct6", "tong_ct06", "ct6_tong", "ct06_tong"}
-        tot_th_g = {"tong_ct8", "tong_ct08", "ct8_tong", "ct08_tong"}
-        tot_dt_t = {"tong_ct9", "tong_ct09", "ct9_tong", "ct09_tong"}
-        tot_th_t = {"tong_ct12", "ct12_tong"}
-        tot_all = {"tong_ct13", "ct13_tong"}
-        row_dt_g = {"ct6", "ct06", "ct_6"}
-        row_th_g = {"ct8", "ct08", "ct_8"}
-        row_dt_t = {"ct9", "ct09", "ct_9"}
-        row_th_t = {"ct12", "ct_12"}
-        row_all = {"ct13", "ct_13"}
-    else:  # TT80/2021
+    if schema == "M14":
+        tot_dt_chua = {"tong_ct5", "tong_ct05", "ct5_tong", "ct05_tong"}
         tot_dt_g = {"tong_ct7", "tong_ct07", "ct7_tong", "ct07_tong"}
         tot_th_g = {"tong_ct9", "tong_ct09", "ct9_tong", "ct09_tong"}
         tot_dt_t = {"tong_ct10", "ct10_tong"}
         tot_th_t = {"tong_ct13", "ct13_tong"}
         tot_all = {"tong_ct14", "ct14_tong"}
+        row_dt_chua = {"ct5", "ct05", "ct_5"}
         row_dt_g = {"ct7", "ct07", "ct_7"}
         row_th_g = {"ct9", "ct09", "ct_9"}
         row_dt_t = {"ct10", "ct_10"}
         row_th_t = {"ct13", "ct_13"}
         row_all = {"ct14", "ct_14"}
+    else:  # M13 (Chuẩn 13 cột gốc 01/NTNN: ct4=DT chưa gồm GTGT, ct6=DT GTGT, ct8=Thuế GTGT, ct9=DT TNDN, ct12=Thuế TNDN, ct13=Tổng thuế)
+        tot_dt_chua = {"tong_ct4", "tong_ct04", "ct4_tong", "ct04_tong"}
+        tot_dt_g = {"tong_ct6", "tong_ct06", "ct6_tong", "ct06_tong"}
+        tot_th_g = {"tong_ct8", "tong_ct08", "ct8_tong", "ct08_tong"}
+        tot_dt_t = {"tong_ct9", "tong_ct09", "ct9_tong", "ct09_tong"}
+        tot_th_t = {"tong_ct12", "ct12_tong"}
+        tot_all = {"tong_ct13", "ct13_tong"}
+        row_dt_chua = {"ct4", "ct04", "ct_4"}
+        row_dt_g = {"ct6", "ct06", "ct_6"}
+        row_th_g = {"ct8", "ct08", "ct_8"}
+        row_dt_t = {"ct9", "ct09", "ct_9"}
+        row_th_t = {"ct12", "ct_12"}
+        row_all = {"ct13", "ct_13"}
 
     # Đọc thẻ tổng cộng của bảng trước
     for el in _iter_non_khbs(scan_root):
@@ -307,7 +265,9 @@ def extract_ntnn_totals_from_xml_root(
         v = _to_float(el.text)
         if v == 0:
             continue
-        if t in tot_dt_g and total_map["dt_gtgt"] == 0:
+        if t in tot_dt_chua and total_map["dt_chua_gtgt"] == 0:
+            total_map["dt_chua_gtgt"] = v
+        elif t in tot_dt_g and total_map["dt_gtgt"] == 0:
             total_map["dt_gtgt"] = v
         elif t in tot_th_g and total_map["thue_gtgt"] == 0:
             total_map["thue_gtgt"] = v
@@ -318,8 +278,8 @@ def extract_ntnn_totals_from_xml_root(
         elif t in tot_all and total_map["tong_thue"] == 0:
             total_map["tong_thue"] = v
 
-    # Nếu không có thẻ tong_ct* thì cộng dồn từ các dòng chi tiết theo đúng chuẩn thông tư
-    if not any(total_map[k] != 0 for k in ("dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
+    # Nếu không có thẻ tong_ct* thì cộng dồn từ các dòng chi tiết theo đúng chuẩn cột
+    if not any(total_map[k] != 0 for k in ("dt_chua_gtgt", "dt_gtgt", "thue_gtgt", "dt_tndn", "thue_tndn")):
         for el in _iter_non_khbs(scan_root):
             children = list(el)
             if not children:
@@ -331,7 +291,11 @@ def extract_ntnn_totals_from_xml_root(
             }
             if not child_vals:
                 continue
-            if any(k in child_vals for k in row_dt_g | row_th_g | row_dt_t | row_th_t):
+            if any(k in child_vals for k in row_dt_chua | row_dt_g | row_th_g | row_dt_t | row_th_t):
+                for k in row_dt_chua:
+                    if k in child_vals:
+                        total_map["dt_chua_gtgt"] += child_vals[k]
+                        break
                 for k in row_dt_g:
                     if k in child_vals:
                         total_map["dt_gtgt"] += child_vals[k]
@@ -385,44 +349,42 @@ def extract_ntnn_contract_rows_from_xml_root(
                 return _to_float(cmap[k])
         return 0.0
 
-    # Khóa nhận diện dòng chi tiết hợp đồng (phân biệt rạch ròi TT103 vs TT80)
+    # Khóa nhận diện dòng chi tiết hợp đồng theo đúng mẫu 01/NTNN 13 cột (1)..(13) (và M14 nếu XML có ct14)
     sem_fin_keys = {
+        "doanhthuchuagomgtgt", "dthuchuagtgt", "dthuchuabaogomthuegtgt",
         "dthutinhthuegtgt", "doanhthutinhthuegtgt", "doanhthugtgt",
         "thuegtgtpnop", "thuegtgtphainop", "sothuegtgt",
         "dthutinhthuetndn", "doanhthutinhthuetndn", "doanhthutndn",
         "thuetndnpnop", "thuetndnphainop", "sothuetndn",
     }
-    tt80_fin_keys = {"ct7", "ct07", "ct_7", "ct9", "ct09", "ct_9", "ct10", "ct_10", "ct13", "ct_13", "ct14", "ct_14"}
-    tt103_fin_keys = {"ct6", "ct06", "ct_6", "ct8", "ct08", "ct_8", "ct9", "ct09", "ct_9", "ct12", "ct_12", "ct13", "ct_13"}
+    m14_fin_keys = {"ct7", "ct07", "ct_7", "ct9", "ct09", "ct_9", "ct10", "ct_10", "ct13", "ct_13", "ct14", "ct_14"}
+    m13_fin_keys = {"ct4", "ct04", "ct_4", "ct6", "ct06", "ct_6", "ct8", "ct08", "ct_8", "ct9", "ct09", "ct_9", "ct12", "ct_12", "ct13", "ct_13"}
 
     rows: List[Dict[str, Any]] = []
     for el in _iter_non_khbs(scan_root):
         children = list(el)
         if not children:
             continue
-        # Chỉ lấy node dòng lá (chứa các thẻ chỉ tiêu trực tiếp, không phải node cha bao toàn tờ khai)
         cmap: Dict[str, str] = {}
         for ch in children:
             if len(ch) == 0 and ch.text and ch.text.strip():
                 cmap[_strip_ns(ch.tag).lower()] = ch.text.strip()
         if not cmap:
             continue
-        # Bỏ qua node dòng tổng cộng (tong_ct*)
         if any(k.startswith("tong_") or k.endswith("_tong") for k in cmap.keys()):
             continue
 
         is_sem = any(k in cmap for k in sem_fin_keys)
-        is_num_row = any(k in cmap for k in (tt103_fin_keys if schema == "TT103" else tt80_fin_keys))
+        is_num_row = any(k in cmap for k in (m14_fin_keys if schema == "M14" else m13_fin_keys))
         if not is_sem and not is_num_row:
             continue
 
-        noi_dung = _pick_str(cmap, ("noidung", "tennhathau", "tenhhdv", "ct2", "ct02", "ct_2", "ct1a", "ct1b", "ct1"))
-        mst_nt = _pick_str(cmap, ("mstnhathau", "mstntnn", "mst_ntnn", "ct3", "ct03", "ct_3"))
-        so_hd = _pick_str(cmap, ("sohopdong", "sohd", "so_hd", "ct4", "ct04", "ct_4"))
-        ngay_hd = _pick_str(cmap, ("ngayhopdong", "ngayhd", "ngay_hd", "ct5", "ct05", "ct_5"))
-
         if is_sem:
-            ngay_tt = _pick_str(cmap, ("ngaythanhtoan", "ngaytt", "ngay_tt", "ct6", "ct06"))
+            noi_dung = _pick_str(cmap, ("noidung", "tennhathau", "tenhhdv", "ct1", "ct01", "ct1a", "ct1b"))
+            mst_nt = _pick_str(cmap, ("mstnhathau", "mstntnn", "mst_ntnn", "ct2", "ct02"))
+            hop_dong = _pick_str(cmap, ("sohopdong", "sohd", "so_hd", "hopdong", "ct3", "ct03"))
+            dt_chua = _pick_num(cmap, ("doanhthuchuagomgtgt", "dthuchuagtgt", "dthuchuabaogomthuegtgt", "ct4", "ct04"))
+            ngay_tt = _pick_str(cmap, ("ngaythanhtoan", "ngaytt", "ngay_tt", "ct5", "ct05"))
             dt_g = _pick_num(cmap, ("dthutinhthuegtgt", "doanhthutinhthuegtgt", "doanhthugtgt"))
             tl_g = _pick_num(cmap, ("tylegtgt", "tyletinhthuegtgt", "thuesuatgtgt"))
             th_g = _pick_num(cmap, ("thuegtgtpnop", "thuegtgtphainop", "sothuegtgt", "thuegtgt"))
@@ -432,18 +394,13 @@ def extract_ntnn_contract_rows_from_xml_root(
             th_t = _pick_num(cmap, ("thuetndnpnop", "thuetndnphainop", "sothuetndn", "thuetndn"))
             tot = _pick_num(cmap, ("tongthuepnop", "tongthuephainop", "tongsothuepnop"))
             row_schema = "Semantic"
-        elif schema == "TT103":
-            ngay_tt = ""
-            dt_g = _pick_num(cmap, ("ct6", "ct06", "ct_6"))
-            tl_g = _pick_num(cmap, ("ct7", "ct07", "ct_7"))
-            th_g = _pick_num(cmap, ("ct8", "ct08", "ct_8"))
-            dt_t = _pick_num(cmap, ("ct9", "ct09", "ct_9"))
-            tl_t = _pick_num(cmap, ("ct10", "ct_10"))
-            mg_t = _pick_num(cmap, ("ct11", "ct_11"))
-            th_t = _pick_num(cmap, ("ct12", "ct_12"))
-            tot = _pick_num(cmap, ("ct13", "ct_13"))
-            row_schema = "TT103"
-        else:  # TT80
+        elif schema == "M14":
+            noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct2", "ct02", "noidung"))
+            mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "ct3", "ct03", "mstnhathau"))
+            so_hd = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong"))
+            ngay_hd = _pick_str(cmap, ("ct4", "ct04", "ct_4", "ngayhopdong"))
+            hop_dong = f"{so_hd} ({ngay_hd})" if (so_hd and ngay_hd) else (so_hd or ngay_hd)
+            dt_chua = _pick_num(cmap, ("ct5", "ct05", "ct_5"))
             ngay_tt = _pick_str(cmap, ("ct6", "ct06", "ct_6", "ngaythanhtoan"))
             dt_g = _pick_num(cmap, ("ct7", "ct07", "ct_7"))
             tl_g = _pick_num(cmap, ("ct8", "ct08", "ct_8"))
@@ -453,17 +410,32 @@ def extract_ntnn_contract_rows_from_xml_root(
             mg_t = _pick_num(cmap, ("ct12", "ct_12"))
             th_t = _pick_num(cmap, ("ct13", "ct_13"))
             tot = _pick_num(cmap, ("ct14", "ct_14"))
-            row_schema = "TT80"
+            row_schema = "M14"
+        else:  # M13 (Chuẩn 13 cột gốc 01/NTNN đúng y ảnh mẫu: (1)..(13))
+            noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct1a", "ct1b", "noidung", "tennhathau"))
+            mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "mstnhathau", "mstntnn"))
+            hop_dong = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong", "hopdong"))
+            dt_chua = _pick_num(cmap, ("ct4", "ct04", "ct_4"))
+            ngay_tt = _pick_str(cmap, ("ct5", "ct05", "ct_5", "ngaythanhtoan"))
+            dt_g = _pick_num(cmap, ("ct6", "ct06", "ct_6"))
+            tl_g = _pick_num(cmap, ("ct7", "ct07", "ct_7"))
+            th_g = _pick_num(cmap, ("ct8", "ct08", "ct_8"))
+            dt_t = _pick_num(cmap, ("ct9", "ct09", "ct_9"))
+            tl_t = _pick_num(cmap, ("ct10", "ct_10"))
+            mg_t = _pick_num(cmap, ("ct11", "ct_11"))
+            th_t = _pick_num(cmap, ("ct12", "ct_12"))
+            tot = _pick_num(cmap, ("ct13", "ct_13"))
+            row_schema = "M13"
 
-        if dt_g == 0 and th_g == 0 and dt_t == 0 and th_t == 0 and not noi_dung and not so_hd:
+        if dt_chua == 0 and dt_g == 0 and th_g == 0 and dt_t == 0 and th_t == 0 and not noi_dung and not hop_dong:
             continue
         if tot == 0:
             tot = th_g + th_t
         rows.append({
             "noi_dung": noi_dung,
             "mst_nt": mst_nt,
-            "so_hd": so_hd,
-            "ngay_hd": ngay_hd,
+            "hop_dong": hop_dong,
+            "dt_chua_gtgt": dt_chua,
             "ngay_tt": ngay_tt,
             "dt_gtgt": dt_g,
             "ty_le_gtgt": tl_g,
@@ -480,8 +452,9 @@ def extract_ntnn_contract_rows_from_xml_root(
 
 
 def get_ntnn_metrics(d: TaxDeclaration) -> Dict[str, Any]:
-    """Lấy các chỉ tiêu tài chính của 1 tờ khai NTNN (ưu tiên từ indicators đã trích xuất từ XML gốc)."""
+    """Lấy các chỉ tiêu tài chính nguyên bản của 1 tờ khai NTNN (ưu tiên từ indicators đã trích xuất từ XML gốc)."""
     ind = d.indicators or {}
+    dt_chua = _to_float(ind.get("_ntnn_dt_chua_gtgt"))
     dt_g = _to_float(ind.get("_ntnn_dt_gtgt"))
     th_g = _to_float(ind.get("_ntnn_thue_gtgt"))
     dt_t = _to_float(ind.get("_ntnn_dt_tndn"))
@@ -489,7 +462,7 @@ def get_ntnn_metrics(d: TaxDeclaration) -> Dict[str, Any]:
     tot = _to_float(ind.get("_ntnn_tong_thue"))
     schema = str(ind.get("_ntnn_schema") or "")
 
-    if dt_g == 0 and th_g == 0 and dt_t == 0 and th_t == 0:
+    if dt_chua == 0 and dt_g == 0 and th_g == 0 and dt_t == 0 and th_t == 0:
         if d.file_path and d.file_path.lower().endswith(".xml"):
             try:
                 tree = ET.parse(d.file_path)
@@ -500,6 +473,7 @@ def get_ntnn_metrics(d: TaxDeclaration) -> Dict[str, Any]:
                     ten_tkhai=d.ten_tkhai,
                     year=d.year,
                 )
+                dt_chua = float(m["dt_chua_gtgt"])
                 dt_g = float(m["dt_gtgt"])
                 th_g = float(m["thue_gtgt"])
                 dt_t = float(m["dt_tndn"])
@@ -509,19 +483,16 @@ def get_ntnn_metrics(d: TaxDeclaration) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    # Doanh thu chưa bao gồm thuế GTGT (chuẩn lên dòng C95 biểu từng năm):
-    # Ưu tiên Doanh thu tính thuế TNDN (chưa gồm GTGT); chỉ khi tờ khai không có TNDN mới lấy (DT GTGT - Thuế GTGT).
-    dt_chua_gtgt = dt_t if dt_t > 0 else max(0.0, dt_g - th_g)
     if tot == 0:
         tot = th_g + th_t
     return {
+        "dt_chua_gtgt": dt_chua,
         "dt_gtgt": dt_g,
         "thue_gtgt": th_g,
         "dt_tndn": dt_t,
         "thue_tndn": th_t,
-        "dt_chua_gtgt": dt_chua_gtgt,
         "tong_thue": tot,
-        "schema": schema or ("TT103" if (d.year or 2022) <= 2021 else "TT80"),
+        "schema": schema or "M13",
     }
 
 
@@ -649,15 +620,21 @@ NTNN_HEADERS = [
     "Loại TK",
     "Lần BS",
     "Ngày lập",
-    "Chuẩn mẫu",
-    "Doanh thu tính thuế GTGT",
-    "Thuế GTGT phải nộp",
-    "Doanh thu tính thuế TNDN\n(chưa gồm GTGT)",
-    "Thuế TNDN phải nộp",
-    "Tổng thuế NTNN\nphải nộp",
+    "Kiểu kỳ",
+    "Doanh thu chưa bao gồm\nthuế GTGT (4)",
+    "Doanh thu tính thuế\nGTGT (6)",
+    "Thuế GTGT\nphải nộp (8)",
+    "Doanh thu tính thuế\nTNDN (9)",
+    "Thuế TNDN\nphải nộp (12)",
+    "Tổng số thuế phải nộp\nvào NSNN (13)",
 ]
 # Cột số liệu nguyên bản trên 'So Thue NTNN Cuoi':
-# M(13)=DT GTGT, N(14)=Thuế GTGT, O(15)=DT TNDN (chưa gồm GTGT -> lên C95), P(16)=Thuế TNDN (-> lên C98), Q(17)=Tổng thuế NTNN
+# M(13)=Doanh thu chưa gồm GTGT (4) -> lên C95
+# N(14)=DT tính thuế GTGT (6)
+# O(15)=Thuế GTGT phải nộp (8) -> lên C97
+# P(16)=DT tính thuế TNDN (9)
+# Q(17)=Thuế TNDN phải nộp (12) -> lên C98
+# R(18)=Tổng số thuế phải nộp NSNN (13)
 
 
 def _style_ntnn_header(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
@@ -675,7 +652,7 @@ def _style_ntnn_header(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
         c.alignment = al_c
         c.border = b_thin
 
-    widths = [6, 28, 15, 28, 10, 12, 12, 12, 11, 8, 12, 16, 18, 17, 19, 17, 18]
+    widths = [6, 28, 15, 28, 10, 12, 12, 12, 11, 8, 12, 11, 19, 18, 17, 18, 17, 18]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.freeze_panes = "C2"
@@ -694,7 +671,6 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
     lan_int = int(d.so_lan) if str(d.so_lan or "").isdigit() else 0
     loai_txt = "Bổ sung" if lan_int > 0 else "Chính thức"
     ky_mode_txt = "Lần PS" if is_ntnn_per_occurrence(d) else "Tháng/Kỳ"
-    schema_disp = f"{m['schema']} ({ky_mode_txt})"
 
     vals = [
         stt,
@@ -708,7 +684,8 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
         loai_txt,
         lan_int,
         d.ngay_lap,
-        schema_disp,
+        ky_mode_txt,
+        round(m["dt_chua_gtgt"]),
         round(m["dt_gtgt"]),
         round(m["thue_gtgt"]),
         round(m["dt_tndn"]),
@@ -717,7 +694,7 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
     ]
     for ci, v in enumerate(vals, start=1):
         c = ws.cell(r, ci, v)
-        c.font = f_bold if ci == 17 else f_reg
+        c.font = f_bold if ci == 18 else f_reg
         c.border = b_thin
         if ci == 3:
             c.number_format = "@"
@@ -734,8 +711,8 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
             c.alignment = al_l
 
 
-# Tiêu đề NGUYÊN BẢN theo đúng mẫu 01/NTNN của từng Thông tư (KHÔNG thêm bớt hay tự chế cột!)
-NTNN_DETAIL_HEADERS_TT103 = [
+# Tiêu đề NGUYÊN BẢN 100% đúng mẫu 01/NTNN 13 cột (1)..(13) theo ảnh mẫu người dùng cung cấp!
+NTNN_DETAIL_HEADERS_M13 = [
     "STT",
     "Tên file XML",
     "MST nộp thay",
@@ -744,49 +721,25 @@ NTNN_DETAIL_HEADERS_TT103 = [
     "Lần BS",
     "Ngày lập",
     "Kiểu kỳ",
-    "Nội dung (2)",
-    "MST của NTNN (3)",
-    "Số hợp đồng (4)",
-    "Ngày hợp đồng (5)",
-    "Doanh thu tính thuế GTGT (6)",
-    "Tỷ lệ % tính thuế GTGT (7)",
-    "Thuế GTGT phải nộp (8)",
-    "Doanh thu tính thuế TNDN (9)",
-    "Tỷ lệ % thuế TNDN (10)",
-    "Thuế miễn giảm Hiệp định (11)",
-    "Thuế TNDN phải nộp (12)",
-    "Tổng số thuế phải nộp NSNN (13)",
-    "Trạng thái / Báo trùng",
-]
-
-NTNN_DETAIL_HEADERS_TT80 = [
-    "STT",
-    "Tên file XML",
-    "MST nộp thay",
-    "Kỳ kê khai",
-    "Loại TK",
-    "Lần BS",
-    "Ngày lập",
-    "Kiểu kỳ",
-    "Nội dung (2)",
-    "MST của NTNN (3)",
-    "Số hợp đồng (4)",
-    "Ngày hợp đồng (5)",
-    "Ngày thanh toán (6)",
-    "Doanh thu tính thuế GTGT (7)",
-    "Tỷ lệ % tính thuế GTGT (8)",
-    "Thuế GTGT phải nộp (9)",
-    "Doanh thu tính thuế TNDN (10)",
-    "Tỷ lệ % thuế TNDN (11)",
-    "Thuế miễn giảm Hiệp định (12)",
-    "Thuế TNDN phải nộp (13)",
-    "Tổng số thuế phải nộp NSNN (14)",
+    "Nội dung (1)",
+    "Mã số thuế (2)",
+    "Hợp đồng số... ngày... tháng... (3)",
+    "Doanh thu chưa bao gồm\nthuế GTGT (4)",
+    "Ngày thanh toán (5)",
+    "Doanh thu tính thuế\nGTGT (6)",
+    "Tỷ lệ giá trị gia tăng\n(%) (7)",
+    "Thuế GTGT phải nộp\n(8)=(6)x(7)",
+    "Doanh thu tính thuế\nTNDN (9)",
+    "Tỷ lệ thuế TNDN\n(%) (10)",
+    "Số thuế được miễn giảm\ntheo Hiệp định (11)",
+    "Thuế TNDN phải nộp\n(12)=(9)x(10)-(11)",
+    "Tổng số thuế phải nộp\nvào NSNN (13)=(8)+(12)",
     "Trạng thái / Báo trùng",
 ]
 
 
 def get_ntnn_contract_rows(d: TaxDeclaration) -> List[Dict[str, Any]]:
-    """Lấy danh sách dòng chi tiết hợp đồng của 1 tờ khai NTNN (ưu tiên từ indicators['_ntnn_rows'], dự phòng đọc trực tiếp từ XML)."""
+    """Lấy danh sách dòng chi tiết hợp đồng nguyên bản của 1 tờ khai NTNN."""
     ind = d.indicators or {}
     cached = ind.get("_ntnn_rows")
     if isinstance(cached, list) and cached:
@@ -805,13 +758,12 @@ def get_ntnn_contract_rows(d: TaxDeclaration) -> List[Dict[str, Any]]:
                 return parsed
         except Exception:
             pass
-    # Dự phòng: nếu tờ khai không có dòng chi tiết hợp đồng -> trả về 1 dòng tổng hợp của tờ khai để không mất dữ liệu
     m = get_ntnn_metrics(d)
     return [{
         "noi_dung": d.ten_nnt or "(Tổng hợp tờ khai)",
         "mst_nt": "",
-        "so_hd": "",
-        "ngay_hd": "",
+        "hop_dong": "",
+        "dt_chua_gtgt": m["dt_chua_gtgt"],
         "ngay_tt": "",
         "dt_gtgt": m["dt_gtgt"],
         "ty_le_gtgt": 0.0,
@@ -825,15 +777,17 @@ def get_ntnn_contract_rows(d: TaxDeclaration) -> List[Dict[str, Any]]:
     }]
 
 
-def _write_ntnn_detail_sheet_for_schema(
+def write_ntnn_timeline_sheet(
     wb: openpyxl.Workbook,
     declarations: List[TaxDeclaration],
-    dup_notes: Dict[int, str],
     existing_sheets: Set[str],
-    sheet_name: str,
-    is_tt103: bool,
+    sheet_name: str = "So Thue NTNN TH",
 ) -> None:
-    """Xuất nguyên bản từng dòng hợp đồng theo ĐÚNG cấu trúc chỉ tiêu gốc của Thông tư (TT103 hoặc TT80)."""
+    """
+    Sheet 1: Xuất NGUYÊN BẢN chi tiết từng dòng hợp đồng đúng 13 cột (1)..(13) của Mẫu 01/NTNN
+    (cột 1 Nội dung -> cột 2 MST -> cột 3 Hợp đồng -> cột 4 Doanh thu chưa gồm GTGT -> cột 5 Ngày thanh toán ->
+     cột 6..8 GTGT -> cột 9..12 TNDN -> cột 13 Tổng thuế NSNN), kèm cột Báo trùng ở cuối.
+    """
     if not declarations:
         return
     if sheet_name in wb.sheetnames:
@@ -841,7 +795,7 @@ def _write_ntnn_detail_sheet_for_schema(
     existing_sheets.add(sheet_name)
     ws = wb.create_sheet(title=sheet_name)
 
-    headers = NTNN_DETAIL_HEADERS_TT103 if is_tt103 else NTNN_DETAIL_HEADERS_TT80
+    headers = NTNN_DETAIL_HEADERS_M13
     total_cols = len(headers)
 
     f_hdr = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
@@ -857,7 +811,7 @@ def _write_ntnn_detail_sheet_for_schema(
     al_l = Alignment(horizontal="left", vertical="center", wrap_text=True)
     al_r = Alignment(horizontal="right", vertical="center")
 
-    ws.row_dimensions[1].height = 30
+    ws.row_dimensions[1].height = 32
     for ci, h in enumerate(headers, start=1):
         c = ws.cell(1, ci, h)
         c.font = f_hdr
@@ -865,23 +819,17 @@ def _write_ntnn_detail_sheet_for_schema(
         c.alignment = al_c
         c.border = b_thin
 
-    if is_tt103:
-        widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 14, 18, 12, 18, 10, 17, 18, 10, 15, 17, 18, 36]
-        sum_cols = (13, 15, 16, 18, 19, 20)
-        rate_cols = (14, 17)
-        tot_tax_col = 20
-        status_col = 21
-    else:
-        widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 14, 18, 12, 13, 18, 10, 17, 18, 10, 15, 17, 18, 36]
-        sum_cols = (14, 16, 17, 19, 20, 21)
-        rate_cols = (15, 18)
-        tot_tax_col = 21
-        status_col = 22
+    widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 14, 24, 19, 13, 18, 11, 17, 18, 11, 16, 17, 18, 36]
+    sum_cols = (12, 14, 16, 17, 19, 20, 21)
+    rate_cols = (15, 18)
+    tot_tax_col = 21
+    status_col = 22
 
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.freeze_panes = "E2"
 
+    dup_notes = find_ntnn_duplicates(declarations)
     sorted_decls = sorted(declarations, key=_sort_key_ntnn)
     cur_r = 2
     stt = 0
@@ -898,7 +846,7 @@ def _write_ntnn_detail_sheet_for_schema(
         contract_rows = get_ntnn_contract_rows(d)
         for cr in contract_rows:
             stt += 1
-            base_vals = [
+            vals = [
                 stt,
                 d.file_name,
                 d.mst,
@@ -909,12 +857,9 @@ def _write_ntnn_detail_sheet_for_schema(
                 ky_mode_txt,
                 cr.get("noi_dung", ""),
                 cr.get("mst_nt", ""),
-                cr.get("so_hd", ""),
-                cr.get("ngay_hd", ""),
-            ]
-            if not is_tt103:
-                base_vals.append(cr.get("ngay_tt", ""))
-            vals = base_vals + [
+                cr.get("hop_dong", ""),
+                round(float(cr.get("dt_chua_gtgt", 0.0))),
+                cr.get("ngay_tt", ""),
                 round(float(cr.get("dt_gtgt", 0.0))),
                 float(cr.get("ty_le_gtgt", 0.0)),
                 round(float(cr.get("thue_gtgt", 0.0))),
@@ -939,7 +884,7 @@ def _write_ntnn_detail_sheet_for_schema(
                 elif ci == 7:
                     c.number_format = "dd/mm/yyyy"
                     c.alignment = al_c
-                elif ci in (1, 4, 5, 6, 8, 12) or (not is_tt103 and ci == 13):
+                elif ci in (1, 4, 5, 6, 8, 13):
                     c.alignment = al_c
                 elif ci in rate_cols:
                     c.number_format = "0.##"
@@ -967,32 +912,6 @@ def _write_ntnn_detail_sheet_for_schema(
             c.fill = fill_tot
             c.border = b_thin
         ws.auto_filter.ref = f"A1:{get_column_letter(total_cols)}{r_end}"
-
-
-def write_ntnn_timeline_sheet(
-    wb: openpyxl.Workbook,
-    declarations: List[TaxDeclaration],
-    existing_sheets: Set[str],
-    sheet_name: str = "So Thue NTNN TH",
-) -> None:
-    """
-    Sheet 1: Xuất NGUYÊN BẢN chi tiết từng dòng hợp đồng trên tất cả tờ khai Thuế Nhà Thầu,
-    tách riêng mẫu TT103/2014 (cột 2..13) và mẫu TT80/2021 (cột 2..14) khi hồ sơ có cả 2 thời kỳ
-    để tuyệt đối không thêm bớt hay làm lệch chỉ tiêu gốc của từng Thông tư.
-    """
-    if not declarations:
-        return
-    dup_notes = find_ntnn_duplicates(declarations)
-    tt103_decls = [d for d in declarations if get_ntnn_metrics(d)["schema"] == "TT103"]
-    tt80_decls = [d for d in declarations if get_ntnn_metrics(d)["schema"] != "TT103"]
-
-    if tt103_decls and tt80_decls:
-        _write_ntnn_detail_sheet_for_schema(wb, tt103_decls, dup_notes, existing_sheets, f"{sheet_name} (TT103)", is_tt103=True)
-        _write_ntnn_detail_sheet_for_schema(wb, tt80_decls, dup_notes, existing_sheets, f"{sheet_name} (TT80)", is_tt103=False)
-    elif tt103_decls:
-        _write_ntnn_detail_sheet_for_schema(wb, tt103_decls, dup_notes, existing_sheets, sheet_name, is_tt103=True)
-    else:
-        _write_ntnn_detail_sheet_for_schema(wb, tt80_decls, dup_notes, existing_sheets, sheet_name, is_tt103=False)
 
 
 def write_ntnn_cuoi_sheet(
@@ -1044,12 +963,12 @@ def write_ntnn_cuoi_sheet(
         r_sum = cur_r
         year_sum_rows[yr] = r_sum
         ws.cell(r_sum, 6, f"Tổng cộng năm {yr}").alignment = al_c
-        for ci in range(13, 18):
+        for ci in range(13, 19):
             col_l = get_column_letter(ci)
             c = ws.cell(r_sum, ci, f"=SUM({col_l}{r_start}:{col_l}{r_end})")
             c.number_format = "#,##0"
             c.alignment = al_r
-        for ci in range(1, 18):
+        for ci in range(1, 19):
             c = ws.cell(r_sum, ci)
             c.font = f_bold
             c.fill = fill_yr
@@ -1060,12 +979,12 @@ def write_ntnn_cuoi_sheet(
     if year_sum_rows:
         r_grand = cur_r
         ws.cell(r_grand, 6, "TỔNG CỘNG TẤT CẢ CÁC NĂM").alignment = al_c
-        for ci in range(13, 18):
+        for ci in range(13, 19):
             col_l = get_column_letter(ci)
             c = ws.cell(r_grand, ci, "=" + "+".join(f"{col_l}{rr}" for rr in year_sum_rows.values()))
             c.number_format = "#,##0"
             c.alignment = al_r
-        for ci in range(1, 18):
+        for ci in range(1, 19):
             c = ws.cell(r_grand, ci)
             c.font = f_bold
             c.fill = fill_tot

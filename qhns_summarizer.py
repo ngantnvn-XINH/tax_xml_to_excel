@@ -2127,11 +2127,11 @@ def integrate_period_reconciliation_for_tax_type(
                 ntnn_decl_rows_g[pk].append(r)
                 ntnn_decl_rows_t[pk].append(r)
             for pk, rlist in ntnn_decl_rows_g.items():
-                expr_g = "=" + "+".join(f"'So Thue NTNN Cuoi'!N{rr}" for rr in rlist)
-                val_g = sum(_eval_simple_formula(wb, wb_v, "So Thue NTNN Cuoi", f"N{rr}") for rr in rlist)
+                expr_g = "=" + "+".join(f"'So Thue NTNN Cuoi'!O{rr}" for rr in rlist)
+                val_g = sum(_eval_simple_formula(wb, wb_v, "So Thue NTNN Cuoi", f"O{rr}") for rr in rlist)
                 decl_map[(pk, "1701")] = (expr_g, val_g)
-                expr_t = "=" + "+".join(f"'So Thue NTNN Cuoi'!P{rr}" for rr in rlist)
-                val_t = sum(_eval_simple_formula(wb, wb_v, "So Thue NTNN Cuoi", f"P{rr}") for rr in rlist)
+                expr_t = "=" + "+".join(f"'So Thue NTNN Cuoi'!Q{rr}" for rr in rlist)
+                val_t = sum(_eval_simple_formula(wb, wb_v, "So Thue NTNN Cuoi", f"Q{rr}") for rr in rlist)
                 decl_map[(pk, "1052")] = (expr_t, val_t)
         for it in main_rows:
             if it["tm"] not in ("1701", "1052") or it["gd"] == "BT":
@@ -2386,8 +2386,8 @@ def export_qhns_by_tax_type_period_files(
                     continue
                 pk = normalize_period_key(ky_raw)
                 if start_year <= pk[0] <= end_year:
-                    decl_ntnn_by_pk_tm[(pk, "1701")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"N{r}")
-                    decl_ntnn_by_pk_tm[(pk, "1052")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"P{r}")
+                    decl_ntnn_by_pk_tm[(pk, "1701")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"O{r}")
+                    decl_ntnn_by_pk_tm[(pk, "1052")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"Q{r}")
 
         for y in years:
             sname = str(y)

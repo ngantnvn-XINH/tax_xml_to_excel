@@ -942,6 +942,7 @@ def parse_tax_xml(file_path: str) -> TaxDeclaration:
             ten_tkhai=ten_tkhai,
             year=ntnn_yr,
         )
+        indicators["_ntnn_dt_chua_gtgt"] = ntnn_m["dt_chua_gtgt"]
         indicators["_ntnn_dt_gtgt"] = ntnn_m["dt_gtgt"]
         indicators["_ntnn_thue_gtgt"] = ntnn_m["thue_gtgt"]
         indicators["_ntnn_dt_tndn"] = ntnn_m["dt_tndn"]

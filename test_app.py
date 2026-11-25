@@ -1107,15 +1107,15 @@ class TestTaxXmlToExcel(unittest.TestCase):
                     f.write(content)
 
             decls = [parse_tax_xml(p) for p in (p1, p2, p3)]
-            # Kiểm tra nhận diện chính xác TT103 vs TT80 (KHÔNG lệch cột!)
+            # Kiểm tra nhận diện chính xác M13 (13 cột gốc ct1..ct13) vs M14 (14 cột nếu có ct14)
             self.assertEqual(decls[0].tax_type, "NTNN")
-            self.assertEqual(decls[0].indicators["_ntnn_schema"], "TT103")
+            self.assertEqual(decls[0].indicators["_ntnn_schema"], "M13")
             self.assertEqual(round(decls[0].indicators["_ntnn_dt_gtgt"]), 105_263_158)
             self.assertEqual(round(decls[0].indicators["_ntnn_thue_gtgt"]), 5_263_158)
             self.assertEqual(round(decls[0].indicators["_ntnn_dt_tndn"]), 100_000_000)
             self.assertEqual(round(decls[0].indicators["_ntnn_thue_tndn"]), 5_000_000)
 
-            self.assertEqual(decls[2].indicators["_ntnn_schema"], "TT80")
+            self.assertEqual(decls[2].indicators["_ntnn_schema"], "M14")
             self.assertEqual(round(decls[2].indicators["_ntnn_dt_gtgt"]), 315_789_474)
             self.assertEqual(round(decls[2].indicators["_ntnn_thue_gtgt"]), 15_789_474)
             self.assertEqual(round(decls[2].indicators["_ntnn_dt_tndn"]), 300_000_000)
@@ -1125,28 +1125,25 @@ class TestTaxXmlToExcel(unittest.TestCase):
             export_to_excel(decls, out_xlsx)
 
             wb = openpyxl.load_workbook(out_xlsx, data_only=False)
-            # Có cả TT103 (2021) và TT80 (2024) -> tách nguyên bản thành 2 sheet đúng chuẩn từng Thông tư!
-            self.assertIn("So Thue NTNN TH (TT103)", wb.sheetnames)
-            self.assertIn("So Thue NTNN TH (TT80)", wb.sheetnames)
+            self.assertIn("So Thue NTNN TH", wb.sheetnames)
             self.assertIn("So Thue NTNN Cuoi", wb.sheetnames)
             self.assertIn("2021", wb.sheetnames)
             self.assertIn("2024", wb.sheetnames)
 
-            # TT103: 1 dòng (row 2) + 1 TỔNG CỘNG (row 3); TT80: 2 dòng (row 2..3) + 1 TỔNG CỘNG (row 4)
-            self.assertEqual(wb["So Thue NTNN TH (TT103)"].max_row, 3)
-            self.assertEqual(wb["So Thue NTNN TH (TT80)"].max_row, 4)
+            # So Thue NTNN TH: 3 dòng (row 2..4) + 1 dòng TỔNG CỘNG (row 5)
+            self.assertEqual(wb["So Thue NTNN TH"].max_row, 5)
             ws_cuoi = wb["So Thue NTNN Cuoi"]
             self.assertEqual(ws_cuoi.cell(3, 6).value, "Tổng cộng năm 2021")
             self.assertEqual(ws_cuoi.cell(5, 6).value, "Tổng cộng năm 2024")
-            self.assertEqual(ws_cuoi.cell(4, 15).value, 300_000_000)  # Bản BS1 thay thế bản chính thức
+            self.assertEqual(ws_cuoi.cell(4, 16).value, 300_000_000)  # Bản BS1 thay thế bản chính thức (cột P = DT TNDN)
 
-            # Kiểm tra công thức liên kết sang sheet '2021' và '2024' (C95=DT TNDN chưa gồm GTGT cột O, C97=GTGT cột N, C98=TNDN cột P)
-            self.assertEqual(wb["2021"]["C95"].value, "='So Thue NTNN Cuoi'!O3")
-            self.assertEqual(wb["2021"]["C97"].value, "='So Thue NTNN Cuoi'!N3")
-            self.assertEqual(wb["2021"]["C98"].value, "='So Thue NTNN Cuoi'!P3")
-            self.assertEqual(wb["2024"]["C95"].value, "='So Thue NTNN Cuoi'!O5")
-            self.assertEqual(wb["2024"]["C97"].value, "='So Thue NTNN Cuoi'!N5")
-            self.assertEqual(wb["2024"]["C98"].value, "='So Thue NTNN Cuoi'!P5")
+            # Kiểm tra công thức liên kết sang sheet '2021' và '2024' (C95=DT chưa gồm GTGT cột M, C97=GTGT cột O, C98=TNDN cột Q)
+            self.assertEqual(wb["2021"]["C95"].value, "='So Thue NTNN Cuoi'!M3")
+            self.assertEqual(wb["2021"]["C97"].value, "='So Thue NTNN Cuoi'!O3")
+            self.assertEqual(wb["2021"]["C98"].value, "='So Thue NTNN Cuoi'!Q3")
+            self.assertEqual(wb["2024"]["C95"].value, "='So Thue NTNN Cuoi'!M5")
+            self.assertEqual(wb["2024"]["C97"].value, "='So Thue NTNN Cuoi'!O5")
+            self.assertEqual(wb["2024"]["C98"].value, "='So Thue NTNN Cuoi'!Q5")
 
             # Kiểm tra đối chiếu thiếu tờ khai trên TQ_NTNN (giả lập TQ_NTNN 2024 chỉ ghi nhận 10,000,000 GTGT < 15,789,474 tờ khai)
             wb_tq = openpyxl.Workbook()
@@ -1597,34 +1594,34 @@ class TestTaxXmlToExcel(unittest.TestCase):
     </TTinChung>
     <CTieuTKhaiChinh>
       <CTietTKhaiChinh>
-        <ct2>Nha thau X - Dich vu phan mem</ct2>
-        <ct3>9900000001</ct3>
-        <ct4>HD-2024-001</ct4>
-        <ct5>2024-01-15</ct5>
-        <ct6>2024-06-10</ct6>
-        <ct7>105263158</ct7>
-        <ct8>5</ct8>
-        <ct9>5263158</ct9>
-        <ct10>100000000</ct10>
-        <ct11>5</ct11>
-        <ct12>0</ct12>
-        <ct13>5000000</ct13>
-        <ct14>10263158</ct14>
+        <ct1>Nha thau X - Dich vu phan mem</ct1>
+        <ct2>9900000001</ct2>
+        <ct3>HD-2024-001 ngay 15/01/2024</ct3>
+        <ct4>100000000</ct4>
+        <ct5>2024-06-10</ct5>
+        <ct6>105263158</ct6>
+        <ct7>5</ct7>
+        <ct8>5263158</ct8>
+        <ct9>100000000</ct9>
+        <ct10>5</ct10>
+        <ct11>0</ct11>
+        <ct12>5000000</ct12>
+        <ct13>10263158</ct13>
       </CTietTKhaiChinh>
       <CTietTKhaiChinh>
-        <ct2>Nha thau Y - Ban quyen</ct2>
-        <ct3>9900000002</ct3>
-        <ct4>HD-2024-002</ct4>
-        <ct5>2024-03-01</ct5>
-        <ct6>2024-06-25</ct6>
+        <ct1>Nha thau Y - Ban quyen</ct1>
+        <ct2>9900000002</ct2>
+        <ct3>HD-2024-002 ngay 01/03/2024</ct3>
+        <ct4>200000000</ct4>
+        <ct5>2024-06-25</ct5>
+        <ct6>0</ct6>
         <ct7>0</ct7>
         <ct8>0</ct8>
-        <ct9>0</ct9>
-        <ct10>200000000</ct10>
-        <ct11>10</ct11>
-        <ct12>0</ct12>
+        <ct9>200000000</ct9>
+        <ct10>10</ct10>
+        <ct11>0</ct11>
+        <ct12>20000000</ct12>
         <ct13>20000000</ct13>
-        <ct14>20000000</ct14>
       </CTietTKhaiChinh>
     </CTieuTKhaiChinh>
   </HSoKhaiThue>
@@ -1644,11 +1641,14 @@ class TestTaxXmlToExcel(unittest.TestCase):
             # Header (1) + 2 dòng hợp đồng (2, 3) + 1 dòng TỔNG CỘNG (4)
             self.assertEqual(ws_th.max_row, 4)
             self.assertEqual(ws_th.cell(2, 9).value, "Nha thau X - Dich vu phan mem")
-            self.assertEqual(ws_th.cell(2, 11).value, "HD-2024-001")
+            self.assertEqual(ws_th.cell(2, 10).value, "9900000001")
+            self.assertEqual(ws_th.cell(2, 11).value, "HD-2024-001 ngay 15/01/2024")
+            self.assertEqual(ws_th.cell(2, 12).value, 100_000_000)
             self.assertEqual(ws_th.cell(2, 13).value, "2024-06-10")
             self.assertEqual(ws_th.cell(2, 16).value, 5_263_158)
             self.assertEqual(ws_th.cell(3, 9).value, "Nha thau Y - Ban quyen")
-            self.assertEqual(ws_th.cell(3, 11).value, "HD-2024-002")
+            self.assertEqual(ws_th.cell(3, 11).value, "HD-2024-002 ngay 01/03/2024")
+            self.assertEqual(ws_th.cell(3, 12).value, 200_000_000)
             self.assertEqual(ws_th.cell(3, 18).value, 10)
             self.assertEqual(ws_th.cell(3, 20).value, 20_000_000)
             self.assertEqual(ws_th.cell(4, 9).value, "TỔNG CỘNG")
@@ -1729,12 +1729,10 @@ class TestTaxXmlToExcel(unittest.TestCase):
             export_to_excel([d_main_2021, d_main_dup, d_nt_dup, d_nt_2024], out_x)
             wb = openpyxl.load_workbook(out_x, data_only=False)
 
-            # Có cả TT103 (2021) và TT80 (2024) -> tách nguyên bản: TT103 có 1 tờ khai; TT80 có 3 tờ khai (trong đó 1 bản 06/2024 bị báo trùng ở cột 22)!
-            ws_th_103 = wb["So Thue NTNN TH (TT103)"]
-            ws_th_80 = wb["So Thue NTNN TH (TT80)"]
-            self.assertEqual(ws_th_103.max_row, 3)
-            self.assertEqual(ws_th_80.max_row, 5)
-            statuses = [str(ws_th_80.cell(r, 22).value or "") for r in range(2, 5)]
+            # So Thue NTNN TH: giữ đủ cả 4 tờ khai (row 2..5) + dòng TỔNG CỘNG (row 6), và báo trùng ở cột 22!
+            ws_th = wb["So Thue NTNN TH"]
+            self.assertEqual(ws_th.max_row, 6)
+            statuses = [str(ws_th.cell(r, 22).value or "") for r in range(2, 6)]
             self.assertEqual(sum(1 for s in statuses if "TRÙNG TỜ KHAI" in s), 1)
 
             # So Thue NTNN Cuoi: loại 1 bản trùng 06/2024 -> chỉ còn 3 tờ khai (2021: 1 dòng + 1 tổng; 2024: 2 dòng + 1 tổng; + 1 grand total = 7 dòng cả header)
