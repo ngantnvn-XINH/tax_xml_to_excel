@@ -2015,6 +2015,104 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_th.cell(2, 22).value, 8_000_000)                    # (13) Thuế TNDN
             self.assertEqual(ws_th.cell(2, 23).value, 8_000_000)                    # (14) Tổng thuế NSNN
 
+    def test_v16_audit_analytics_sheets_and_weekend_deadline(self) -> None:
+        """Kiểm thử v1.6: 3 sheet phụ trợ độc lập (KiemSoat_GTGT, PhanTich_RuiRo, GDLK_30EBITDA) + lùi hạn nộp cuối tuần."""
+        from excel_exporter import export_to_excel
+        from penalty_calculator import adjust_start_date_for_weekend
+        from tax_parser import TaxDeclaration
+
+        # 1. Kiểm tra lùi hạn nộp rơi vào Thứ 7 / Chủ nhật
+        # 20/01/2024 là Thứ 7 -> hạn nộp Thứ 2 (22/01) -> tính chậm nộp từ Thứ 3 (23/01/2024)
+        self.assertEqual(adjust_start_date_for_weekend(datetime.date(2024, 1, 21)), datetime.date(2024, 1, 23))
+        # 20/08/2023 là Chủ nhật -> hạn nộp Thứ 2 (21/08) -> tính chậm nộp từ Thứ 3 (22/08/2023)
+        self.assertEqual(adjust_start_date_for_weekend(datetime.date(2023, 8, 21)), datetime.date(2023, 8, 22))
+        # 20/06/2023 là Thứ 3 -> giữ nguyên 21/06/2023
+        self.assertEqual(adjust_start_date_for_weekend(datetime.date(2023, 6, 21)), datetime.date(2023, 6, 21))
+
+        # 2. Tạo bộ tờ khai giả lập ẩn danh 100% (2 kỳ GTGT có sai đầu kỳ + KCT, 1 TNDN KQKD, 1 BCTC có LCTTGT)
+        d_gt1 = TaxDeclaration(
+            file_path="gt_01_2023.xml", file_name="gt_01_2023.xml",
+            mst="0100000077", ten_nnt="CTY ANALYTICS TEST",
+            ma_tkhai="01/GTGT", ten_tkhai="01/GTGT", tax_type="GTGT",
+            ky_kkhai="01/2023", tu_ngay=datetime.date(2023, 1, 1), den_ngay=datetime.date(2023, 1, 31),
+            so_lan="0", ngay_lap=datetime.date(2023, 2, 15),
+            indicators={"ct22": 10_000_000, "ct24": 5_000_000, "ct25": 5_000_000, "ct26": 0, "ct34": 100_000_000, "ct43": 12_000_000},
+        )
+        # Kỳ 02/2023: ct22=11tr != ct43 kỳ trước (12tr) => Sai đầu kỳ; ct26=20tr > 0 & ct24=ct25=4tr => Cảnh báo phân bổ
+        d_gt2 = TaxDeclaration(
+            file_path="gt_02_2023.xml", file_name="gt_02_2023.xml",
+            mst="0100000077", ten_nnt="CTY ANALYTICS TEST",
+            ma_tkhai="01/GTGT", ten_tkhai="01/GTGT", tax_type="GTGT",
+            ky_kkhai="02/2023", tu_ngay=datetime.date(2023, 2, 1), den_ngay=datetime.date(2023, 2, 28),
+            so_lan="0", ngay_lap=datetime.date(2023, 3, 15),
+            indicators={"ct22": 11_000_000, "ct24": 4_000_000, "ct25": 4_000_000, "ct26": 20_000_000, "ct34": 100_000_000, "ct43": 9_000_000},
+        )
+        d_tndn = TaxDeclaration(
+            file_path="tndn_2023.xml", file_name="tndn_2023.xml",
+            mst="0100000077", ten_nnt="CTY ANALYTICS TEST",
+            ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN",
+            ky_kkhai="2023", tu_ngay=datetime.date(2023, 1, 1), den_ngay=datetime.date(2023, 12, 31),
+            so_lan="0", ngay_lap=datetime.date(2024, 3, 25),
+            indicators={"A1": 500_000_000, "E": 100_000_000},
+            appendices={
+                "PL_03_1A": [
+                    {"ma_so": "01", "chi_tieu": "Doanh thu", "gia_tri": 10_000_000_000},
+                    {"ma_so": "10", "chi_tieu": "Doanh thu thuan", "gia_tri": 10_000_000_000},
+                    {"ma_so": "11", "chi_tieu": "Gia von", "gia_tri": 8_000_000_000},
+                    {"ma_so": "21", "chi_tieu": "DTTC", "gia_tri": 50_000_000},
+                    {"ma_so": "22", "chi_tieu": "CPTC", "gia_tri": 600_000_000},
+                    {"ma_so": "23", "chi_tieu": "CP lai vay", "gia_tri": 600_000_000},
+                    {"ma_so": "25", "chi_tieu": "CPBH", "gia_tri": 500_000_000},
+                    {"ma_so": "26", "chi_tieu": "CPQLDN", "gia_tri": 450_000_000},
+                    {"ma_so": "30", "chi_tieu": "LN thuan", "gia_tri": 500_000_000},
+                ]
+            },
+        )
+        d_bctc = TaxDeclaration(
+            file_path="bctc_2023.xml", file_name="bctc_2023.xml",
+            mst="0100000077", ten_nnt="CTY ANALYTICS TEST",
+            ma_tkhai="BCTC", ten_tkhai="BCTC", tax_type="BCTC",
+            ky_kkhai="2023", tu_ngay=datetime.date(2023, 1, 1), den_ngay=datetime.date(2023, 12, 31),
+            so_lan="0", ngay_lap=datetime.date(2024, 3, 25),
+            indicators={
+                "131_cuoi": 1_200_000_000,
+                "311_cuoi": 900_000_000,
+                "320_cuoi": 5_000_000_000,
+                "330_cuoi": 4_000_000_000,
+                "338_cuoi": 3_000_000_000,
+                "410_cuoi": 10_000_000_000,
+                "411_cuoi": 10_000_000_000,
+            },
+            appendices={
+                "PL_LCTTGT": [{"ma_so": "02", "chi_tieu": "Khau hao TSCD", "nam_nay": 400_000_000}]
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_x = os.path.join(tmpdir, "out_analytics.xlsx")
+            export_to_excel([d_gt1, d_gt2, d_tndn, d_bctc], out_x)
+            wb = openpyxl.load_workbook(out_x, data_only=False)
+            self.assertIn("KiemSoat_GTGT", wb.sheetnames)
+            self.assertIn("PhanTich_RuiRo", wb.sheetnames)
+            self.assertIn("GDLK_30EBITDA", wb.sheetnames)
+
+            # Kiểm tra công thức trên KiemSoat_GTGT (2 dòng kỳ: row 4, row 5; tổng cộng row 6)
+            ws_ks = wb["KiemSoat_GTGT"]
+            self.assertIn("IF(ABS(D5-E5)>1", str(ws_ks["F5"].value))
+            self.assertEqual(ws_ks["G5"].value, "=D5-E5")
+            self.assertIn("Cần KT phân bổ", str(ws_ks["M5"].value))
+
+            # Kiểm tra công thức trên PhanTich_RuiRo
+            ws_rr = wb["PhanTich_RuiRo"]
+            self.assertEqual(ws_rr["B5"].value, 2023)
+            self.assertIn("F5/E5", str(ws_rr["K5"].value))
+
+            # Kiểm tra công thức trên GDLK_30EBITDA (LCTTGT khấu hao = 400tr, công thức 30% EBITDA & GDLK)
+            ws_gd = wb["GDLK_30EBITDA"]
+            self.assertIn("CÓ YẾU TỐ GDLK", str(ws_gd["C13"].value))
+            self.assertEqual(ws_gd["C21"].value, 400_000_000)  # Khấu hao lấy trực tiếp từ LCTTGT [02]
+            self.assertIn("0.3*C22", str(ws_gd["C23"].value))  # 30% EBITDA
+
 
 if __name__ == "__main__":
     unittest.main()

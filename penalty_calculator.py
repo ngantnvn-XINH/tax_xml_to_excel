@@ -123,6 +123,20 @@ def compute_license_fee_start_date(year: int) -> datetime.date:
     return datetime.date(year, 1, 31)
 
 
+def adjust_start_date_for_weekend(start_date: datetime.date) -> datetime.date:
+    """
+    Điều chỉnh ngày bắt đầu tính chậm nộp theo Điều 86 TT 80/2021/TT-BTC:
+    Nếu ngày cuối cùng của thời hạn nộp thuế (start_date - 1 ngày) rơi vào Thứ 7 hoặc Chủ nhật,
+    thời hạn nộp được lùi sang ngày làm việc kế tiếp (Thứ 2) -> ngày bắt đầu tính chậm nộp là Thứ 3.
+    """
+    deadline = start_date - datetime.timedelta(days=1)
+    if deadline.weekday() == 5:  # Thứ 7 -> hạn nộp Thứ 2 -> tính chậm nộp từ Thứ 3
+        return start_date + datetime.timedelta(days=2)
+    if deadline.weekday() == 6:  # Chủ nhật -> hạn nộp Thứ 2 -> tính chậm nộp từ Thứ 3
+        return start_date + datetime.timedelta(days=1)
+    return start_date
+
+
 def detect_vat_frequency_from_workbook(wb: openpyxl.Workbook) -> str:
     """
     Tự động nhận diện kỳ kê khai GTGT ('month' hoặc 'quarter') từ sheet 'So Thue GTGT Cuoi'.
@@ -622,7 +636,7 @@ def add_late_payment_sheet(
                     curr_row,
                     "",
                     f"   Quý {q}/{yr}",
-                    compute_vat_quarterly_start_date(yr, q),
+                    adjust_start_date_for_weekend(compute_vat_quarterly_start_date(yr, q)),
                     tax_formula_or_val=0,
                     is_input_tax=True,
                 )
@@ -633,7 +647,7 @@ def add_late_payment_sheet(
                     curr_row,
                     "",
                     f"   Tháng {m}",
-                    compute_vat_monthly_start_date(yr, m),
+                    adjust_start_date_for_weekend(compute_vat_monthly_start_date(yr, m)),
                     tax_formula_or_val=0,
                     is_input_tax=True,
                 )
@@ -650,7 +664,7 @@ def add_late_payment_sheet(
         yr_sheet = str(yr)
         has_yr_sheet = yr_sheet in wb.sheetnames
         cit_val: object = f"=IF('{yr_sheet}'!E76>0,'{yr_sheet}'!E76,0)" if has_yr_sheet else 0
-        cit_start = compute_cit_start_date(yr, fiscal_ends.get(yr))
+        cit_start = adjust_start_date_for_weekend(compute_cit_start_date(yr, fiscal_ends.get(yr)))
         _write_detail_row(
             r_cit,
             2,
@@ -675,7 +689,7 @@ def add_late_payment_sheet(
             r_pit,
             3,
             "Thuế TNCN",
-            compute_pit_start_date(yr),
+            adjust_start_date_for_weekend(compute_pit_start_date(yr)),
             tax_formula_or_val=pit_val,
             is_input_tax=not has_yr_sheet,
             is_group_header_style=True,
@@ -723,7 +737,7 @@ def add_late_payment_sheet(
             r_mb,
             5,
             "Lệ phí môn bài",
-            compute_license_fee_start_date(yr),
+            adjust_start_date_for_weekend(compute_license_fee_start_date(yr)),
             tax_formula_or_val=0,
             is_input_tax=True,
             is_group_header_style=True,

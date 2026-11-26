@@ -3660,6 +3660,10 @@ def _populate_workbook_sheets(
         )
         add_audit_report_sheet(wb)
 
+    if gtgt_items or tndn_items or bctc_items:
+        from audit_analytics import write_audit_analytics_sheets
+        write_audit_analytics_sheets(wb, existing_sheets, bctc_decls=bctc_items)
+
     other_items = [d for d in valid_decls if d.tax_type == "Khác"]
     if other_items:
         write_other_declarations_sheet(wb, other_items, existing_sheets, sheet_name="To_Khai_Khac")
