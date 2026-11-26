@@ -66,38 +66,75 @@ def extract_ky_fiscal_year(
     Trích xuất NĂM TÀI CHÍNH của Kỳ báo cáo khi doanh nghiệp lệch kỳ (VD fiscal_start_month=4: 04/YYYY..03/(YYYY+1)):
     - Nếu fiscal_start_month <= 1: giống hệt extract_ky_year.
     - Nếu fiscal_start_month == 4:
-        * '2001', '2002', '2003' (T1..T3/2020) -> năm tài chính 2019 (kỳ trước của năm 2020!)
-        * '2004'..'2012', '2101'..'2103'       -> năm tài chính 2020
+        * '2001', '2002', '2003', '200215', '15/02/2020', '2020-02-15', '20200215' -> năm tài chính 2019
+        * '2004'..'2012', '2101'..'2103', '210215', '15/02/2021', '2021-02-15'     -> năm tài chính 2020
         * '20Q1' -> 2019; '20Q2'..'20Q4', '21Q1' -> 2020
         * '20CN', '2020' -> 2020
     """
     if fiscal_start_month <= 1:
         return extract_ky_year(ky_val, ngay_ht)
+    if isinstance(ky_val, (datetime.datetime, datetime.date)):
+        return ky_val.year if ky_val.month >= fiscal_start_month else ky_val.year - 1
     if ky_val is not None:
         s = str(ky_val).strip().upper()
+        # 1. Định dạng YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD (bao gồm cả chuỗi '2021-02-15 00:00:00')
+        m_iso = re.search(r"(20\d{2})[/.\-](0?[1-9]|1[0-2])[/.\-](\d{1,2})", s)
+        if m_iso:
+            yr, mo = int(m_iso.group(1)), int(m_iso.group(2))
+            return yr if mo >= fiscal_start_month else yr - 1
+        # 2. Định dạng DD/MM/YYYY / DD-MM-YYYY / DD.MM.YYYY (kể cả D/15/02/2021)
+        m_dfull = re.search(r"(\d{1,2})[/.\-](0?[1-9]|1[0-2])[/.\-](20\d{2})", s)
+        if m_dfull:
+            mo, yr = int(m_dfull.group(2)), int(m_dfull.group(3))
+            return yr if mo >= fiscal_start_month else yr - 1
+        # 3. Định dạng 8 chữ số YYYYMMDD (VD: 20210215)
+        m_ymd8 = re.fullmatch(r"(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])", s)
+        if m_ymd8:
+            yr, mo = int(m_ymd8.group(1)), int(m_ymd8.group(2))
+            return yr if mo >= fiscal_start_month else yr - 1
+        # 4. Định dạng 6 chữ số: phân biệt YYMMDD (VD: 210215, 200215) và YYYYMM (VD: 202102)
+        if re.fullmatch(r"\d{6}", s):
+            y4, m_tail = int(s[:4]), int(s[4:6])
+            y2, m_mid, d_tail = 2000 + int(s[:2]), int(s[2:4]), int(s[4:6])
+            is_valid_yyyymm = (2010 <= y4 <= 2039) and (1 <= m_tail <= 12)
+            is_valid_yymmdd = (2010 <= y2 <= 2039) and (1 <= m_mid <= 12) and (1 <= d_tail <= 31)
+            if is_valid_yymmdd and not is_valid_yyyymm:
+                return y2 if m_mid >= fiscal_start_month else y2 - 1
+            if is_valid_yyyymm and not is_valid_yymmdd:
+                return y4 if m_tail >= fiscal_start_month else y4 - 1
+            if is_valid_yymmdd and is_valid_yyyymm:
+                # Nếu có ngay_ht, ưu tiên cách hiểu gần với năm hạch toán hơn
+                if ngay_ht and abs(y2 - ngay_ht.year) < abs(y4 - ngay_ht.year):
+                    return y2 if m_mid >= fiscal_start_month else y2 - 1
+                return y4 if m_tail >= fiscal_start_month else y4 - 1
+        # 5. Định dạng 4 chữ số YYMM (VD: 2102)
         m_ym = re.match(r"^(\d{2})(0[1-9]|1[0-2])$", s)
         if m_ym:
             yr, mo = 2000 + int(m_ym.group(1)), int(m_ym.group(2))
             return yr if mo >= fiscal_start_month else yr - 1
+        # 6. Định dạng quý YYQ1..4
         m_yq = re.match(r"^(\d{2})Q([1-4])$", s)
         if m_yq:
             yr, q = 2000 + int(m_yq.group(1)), int(m_yq.group(2))
             q_mo = (q - 1) * 3 + 1
             return yr if q_mo >= fiscal_start_month else yr - 1
-        m_dfull = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](20\d{2})", s)
-        if m_dfull:
-            mo, yr = int(m_dfull.group(2)), int(m_dfull.group(3))
-            if 1 <= mo <= 12:
-                return yr if mo >= fiscal_start_month else yr - 1
-        m_mfull = re.match(r"^T?(0?[1-9]|1[0-2])[/-](20\d{2})$", s)
+        # 7. Định dạng MM/YYYY hoặc T02/2021 hoặc MM.YYYY
+        m_mfull = re.match(r"^T?(0?[1-9]|1[0-2])[/.\-](20\d{2})$", s)
         if m_mfull:
             mo, yr = int(m_mfull.group(1)), int(m_mfull.group(2))
             return yr if mo >= fiscal_start_month else yr - 1
-        m_qfull = re.match(r"^Q([1-4])[/-](20\d{2})$", s)
+        # 8. Định dạng YYYY/MM hoặc YYYY-MM
+        m_ymfull = re.match(r"^(20\d{2})[/.\-](0?[1-9]|1[0-2])$", s)
+        if m_ymfull:
+            yr, mo = int(m_ymfull.group(1)), int(m_ymfull.group(2))
+            return yr if mo >= fiscal_start_month else yr - 1
+        # 9. Định dạng Q1/2021
+        m_qfull = re.match(r"^Q([1-4])[/.\-](20\d{2})$", s)
         if m_qfull:
             q, yr = int(m_qfull.group(1)), int(m_qfull.group(2))
             q_mo = (q - 1) * 3 + 1
             return yr if q_mo >= fiscal_start_month else yr - 1
+        # 10. Định dạng cả năm YYCN hoặc YYYY
         m_cn = re.match(r"^(\d{2})CN$", s)
         if m_cn:
             return 2000 + int(m_cn.group(1))
@@ -112,8 +149,10 @@ def extract_ky_fiscal_year(
 def detect_fiscal_start_month(wb: openpyxl.Workbook) -> int:
     """
     Tự động nhận diện tháng bắt đầu năm tài chính lệch kỳ từ sheet 'So Thue GTGT Cuoi (Lech ky)'
-    hoặc 'So Thue NTNN Cuoi (Lech ky)' (VD: kỳ đầu tiên là '2004' hoặc '04/2020' -> trả về 4).
-    Nếu năm dương lịch chuẩn -> trả về 1.
+    hoặc 'So Thue NTNN Cuoi (Lech ky)':
+    - Ưu tiên tuyệt đối dòng nhãn 'Tổng cộng năm YYYY (MM/YYYY-MM/YYYY)' (chính xác 100% kể cả khi
+      dòng kỳ đầu tiên trong bảng là tháng 01 thuộc năm tài chính trước!).
+    - Nếu không có nhãn khoảng tháng mới fallback sang đọc kỳ đầu tiên.
     """
     gtgt_lk = None
     ntnn_lk = None
@@ -124,18 +163,26 @@ def detect_fiscal_start_month(wb: openpyxl.Workbook) -> int:
                 ntnn_lk = s
             else:
                 gtgt_lk = s
+
+    # Bước 1: Quét nhãn 'Tổng cộng năm YYYY (MM/YYYY-MM/YYYY)' trên cả GTGT và NTNN lệch kỳ
+    for sname, label_col in ((gtgt_lk, 5), (ntnn_lk, 6)):
+        if not sname:
+            continue
+        ws = wb[sname]
+        for r in range(2, ws.max_row + 1):
+            val_lbl = str(ws.cell(r, label_col).value or "").strip()
+            m_rng = re.search(r"\((\d{1,2})/20\d{2}\s*[-–]\s*\d{1,2}/20\d{2}\)", val_lbl)
+            if m_rng:
+                mo = int(m_rng.group(1))
+                if 2 <= mo <= 12:
+                    return mo
+
+    # Bước 2: Fallback đọc kỳ đầu tiên nếu file chưa có nhãn khoảng (MM/YYYY-MM/YYYY)
     target_sheet = gtgt_lk or ntnn_lk
     if not target_sheet:
         return 1
     ws = wb[target_sheet]
     if target_sheet == ntnn_lk:
-        # Trên 'So Thue NTNN Cuoi (Lech ky)', cột 6 có dòng 'Tổng cộng năm YYYY (MM/YYYY-MM/YYYY)' hoặc kỳ đầu tiên
-        for r in range(2, min(ws.max_row + 1, 50)):
-            val_f = str(ws.cell(r, 6).value or "").strip()
-            m_rng = re.search(r"\((\d{1,2})/20\d{2}\s*-\s*\d{1,2}/20\d{2}\)", val_f)
-            if m_rng:
-                mo = int(m_rng.group(1))
-                return mo if 2 <= mo <= 12 else 1
         for r in range(2, min(ws.max_row + 1, 25)):
             ky_raw = str(ws.cell(r, 6).value or "").strip().upper()
             if not ky_raw or "tổng cộng" in ky_raw.lower():

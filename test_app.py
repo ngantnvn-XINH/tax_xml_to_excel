@@ -2113,6 +2113,31 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_gd["C21"].value, 400_000_000)  # Khấu hao lấy trực tiếp từ LCTTGT [02]
             self.assertIn("0.3*C22", str(ws_gd["C23"].value))  # 30% EBITDA
 
+    def test_v16_detect_fiscal_month_and_ntnn_tq_date_formats(self) -> None:
+        """Kiểm thử v1.6: Nhận diện đúng tháng bắt đầu lệch kỳ ngay cả khi kỳ đầu là tháng 01 (thuộc NTC trước) & quy đổi đúng mọi định dạng kỳ ngày trên TQ_NTNN."""
+        from qhns_summarizer import detect_fiscal_start_month, extract_ky_fiscal_year
+
+        # 1. Workbook có 'So Thue GTGT Cuoi (Lech ky)' bắt đầu bằng 2001 (T1/2020 thuộc NTC 2019), nhưng nhãn tổng là (04/2020-03/2021)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "So Thue GTGT Cuoi (Lech ky)"
+        ws.cell(3, 5, "CTY LECH KY")
+        ws.cell(3, 7, "2001")
+        ws.cell(4, 5, "Tổng cộng năm 2019")
+        ws.cell(5, 5, "CTY LECH KY")
+        ws.cell(5, 7, "2004")
+        ws.cell(6, 5, "Tổng cộng năm 2020 (04/2020-03/2021)")
+        self.assertEqual(detect_fiscal_start_month(wb), 4)
+
+        # 2. Mọi định dạng kỳ ngày/tháng phổ biến trên Sổ Tổng Quan TMS (TQ_NTNN) khi lệch kỳ tháng 4
+        self.assertEqual(extract_ky_fiscal_year("210215", datetime.datetime(2021, 2, 20), 4), 2020)
+        self.assertEqual(extract_ky_fiscal_year("200215", datetime.datetime(2020, 2, 20), 4), 2019)
+        self.assertEqual(extract_ky_fiscal_year("20210215", datetime.datetime(2021, 2, 20), 4), 2020)
+        self.assertEqual(extract_ky_fiscal_year("2021-02-15 00:00:00", None, 4), 2020)
+        self.assertEqual(extract_ky_fiscal_year(datetime.datetime(2021, 2, 15), None, 4), 2020)
+        self.assertEqual(extract_ky_fiscal_year("2021/02", None, 4), 2020)
+        self.assertEqual(extract_ky_fiscal_year("210415", datetime.datetime(2021, 4, 20), 4), 2021)
+
 
 if __name__ == "__main__":
     unittest.main()
