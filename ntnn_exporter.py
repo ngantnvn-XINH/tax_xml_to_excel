@@ -861,9 +861,11 @@ def write_ntnn_cuoi_sheet(
     declarations: List[TaxDeclaration],
     existing_sheets: Set[str],
     sheet_name: str = "So Thue NTNN Cuoi",
+    fiscal_ranges: Optional[Dict[int, Tuple[datetime.date, datetime.date]]] = None,
 ) -> Dict[int, int]:
     """
     Sheet 2: Chốt tờ khai NTNN hiệu lực cuối cùng theo từng kỳ/lần phát sinh, nhóm theo từng năm
+    (hoặc theo NĂM TÀI CHÍNH lệch kỳ nếu fiscal_ranges được cung cấp — tương tự 'So Thue GTGT Cuoi (Lech ky)')
     và có dòng 'Tổng cộng năm YYYY' (=SUM(...)) ngay bên dưới mỗi năm.
     Trả về dict {year: row_index_of_year_total}.
     """
@@ -876,9 +878,28 @@ def write_ntnn_cuoi_sheet(
     _style_ntnn_header(ws)
 
     latest = filter_latest_ntnn_declarations(declarations)
+
+    default_start_month = 1
+    if fiscal_ranges:
+        start_months = [r_start.month for r_start, _ in fiscal_ranges.values()]
+        if start_months:
+            default_start_month = max(set(start_months), key=start_months.count)
+
+    def _resolve_ntnn_group_year(d: TaxDeclaration) -> int:
+        if not fiscal_ranges:
+            return d.year or (d.tu_ngay.year if d.tu_ngay else (d.ngay_lap.year if d.ngay_lap else 0))
+        ref_date = d.tu_ngay or d.den_ngay or d.ngay_lap
+        if ref_date:
+            for f_yr, (f_start, f_end) in fiscal_ranges.items():
+                if f_start <= ref_date <= f_end:
+                    return f_yr
+            if default_start_month > 1:
+                return ref_date.year if ref_date.month >= default_start_month else (ref_date.year - 1)
+        return d.year or (d.tu_ngay.year if d.tu_ngay else (d.ngay_lap.year if d.ngay_lap else 0))
+
     by_year: Dict[int, List[TaxDeclaration]] = {}
     for d in latest:
-        yr = d.year or (d.tu_ngay.year if d.tu_ngay else (d.ngay_lap.year if d.ngay_lap else 0))
+        yr = _resolve_ntnn_group_year(d)
         by_year.setdefault(yr, []).append(d)
 
     f_bold = Font(name="Calibri", size=9, bold=True)
@@ -901,10 +922,15 @@ def write_ntnn_cuoi_sheet(
             cur_r += 1
         r_end = cur_r - 1
 
-        # Dòng Tổng cộng năm YYYY
+        # Dòng Tổng cộng năm YYYY (kèm khoảng lệch kỳ nếu có)
         r_sum = cur_r
         year_sum_rows[yr] = r_sum
-        ws.cell(r_sum, 6, f"Tổng cộng năm {yr}").alignment = al_c
+        if fiscal_ranges and yr in fiscal_ranges:
+            f_s, f_e = fiscal_ranges[yr]
+            yr_label = f"Tổng cộng năm {yr} ({f_s.strftime('%m/%Y')}-{f_e.strftime('%m/%Y')})"
+        else:
+            yr_label = f"Tổng cộng năm {yr}"
+        ws.cell(r_sum, 6, yr_label).alignment = al_c
         for ci in range(13, 19):
             col_l = get_column_letter(ci)
             c = ws.cell(r_sum, ci, f"=SUM({col_l}{r_start}:{col_l}{r_end})")

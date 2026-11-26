@@ -84,6 +84,11 @@ def extract_ky_fiscal_year(
             yr, q = 2000 + int(m_yq.group(1)), int(m_yq.group(2))
             q_mo = (q - 1) * 3 + 1
             return yr if q_mo >= fiscal_start_month else yr - 1
+        m_dfull = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](20\d{2})", s)
+        if m_dfull:
+            mo, yr = int(m_dfull.group(2)), int(m_dfull.group(3))
+            if 1 <= mo <= 12:
+                return yr if mo >= fiscal_start_month else yr - 1
         m_mfull = re.match(r"^T?(0?[1-9]|1[0-2])[/-](20\d{2})$", s)
         if m_mfull:
             mo, yr = int(m_mfull.group(1)), int(m_mfull.group(2))
@@ -107,16 +112,43 @@ def extract_ky_fiscal_year(
 def detect_fiscal_start_month(wb: openpyxl.Workbook) -> int:
     """
     Tự động nhận diện tháng bắt đầu năm tài chính lệch kỳ từ sheet 'So Thue GTGT Cuoi (Lech ky)'
-    (VD: kỳ đầu tiên là '2004' hoặc '04/2020' -> trả về 4). Nếu năm dương lịch chuẩn -> trả về 1.
+    hoặc 'So Thue NTNN Cuoi (Lech ky)' (VD: kỳ đầu tiên là '2004' hoặc '04/2020' -> trả về 4).
+    Nếu năm dương lịch chuẩn -> trả về 1.
     """
-    target_sheet = None
+    gtgt_lk = None
+    ntnn_lk = None
     for s in wb.sheetnames:
-        if "lech ky" in s.strip().lower():
-            target_sheet = s
-            break
+        sl = s.strip().lower()
+        if "lech ky" in sl:
+            if "ntnn" in sl:
+                ntnn_lk = s
+            else:
+                gtgt_lk = s
+    target_sheet = gtgt_lk or ntnn_lk
     if not target_sheet:
         return 1
     ws = wb[target_sheet]
+    if target_sheet == ntnn_lk:
+        # Trên 'So Thue NTNN Cuoi (Lech ky)', cột 6 có dòng 'Tổng cộng năm YYYY (MM/YYYY-MM/YYYY)' hoặc kỳ đầu tiên
+        for r in range(2, min(ws.max_row + 1, 50)):
+            val_f = str(ws.cell(r, 6).value or "").strip()
+            m_rng = re.search(r"\((\d{1,2})/20\d{2}\s*-\s*\d{1,2}/20\d{2}\)", val_f)
+            if m_rng:
+                mo = int(m_rng.group(1))
+                return mo if 2 <= mo <= 12 else 1
+        for r in range(2, min(ws.max_row + 1, 25)):
+            ky_raw = str(ws.cell(r, 6).value or "").strip().upper()
+            if not ky_raw or "tổng cộng" in ky_raw.lower():
+                continue
+            m_d = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](20\d{2})", ky_raw)
+            if m_d:
+                mo = int(m_d.group(2))
+                return mo if 2 <= mo <= 12 else 1
+            m_m = re.match(r"^T?(0?[1-9]|1[0-2])[/-](20\d{2})$", ky_raw)
+            if m_m:
+                mo = int(m_m.group(1))
+                return mo if 2 <= mo <= 12 else 1
+        return 1
     for r in range(3, min(ws.max_row + 1, 25)):
         lbl_e = str(ws.cell(r, 5).value or "").strip().lower()
         if "tổng cộng" in lbl_e:
@@ -311,11 +343,13 @@ def compute_tq_metrics(
     start_year: int,
     end_year: int,
     fiscal_start_month: int = 1,
+    is_ntnn: bool = False,
 ) -> Dict[str, Any]:
     """
     Tính toán toàn bộ chỉ số từ dữ liệu TQ theo đúng chuẩn nghiệp vụ thanh tra - kiểm tra thuế:
-    - Hỗ trợ đầy đủ năm tài chính lệch kỳ cho GTGT (fiscal_start_month > 1, VD tháng 4: 04/YYYY..03/(YYYY+1)):
-      các kỳ trước tháng bắt đầu năm tài chính (VD T1..T3 của start_year) được tính là KỲ TRƯỚC để lấy đúng số đầu kỳ GTGT!
+    - Hỗ trợ đầy đủ năm tài chính lệch kỳ cho GTGT (tm='1701') VÀ Thuế Nhà Thầu (is_ntnn=True: cả 1701 & 1052)
+      khi fiscal_start_month > 1 (VD tháng 4: 04/YYYY..03/(YYYY+1)):
+      các kỳ trước tháng bắt đầu năm tài chính (VD T1..T3 của start_year) được tính là KỲ TRƯỚC để lấy đúng số đầu kỳ!
     - Số đầu kỳ (Cột C Biên bản QHNS): Tính ròng theo từng kỳ trước (< start_year) để C2 (âm) và TK/QT/TQ/TH (dương)
       tự bù trừ đúng dấu, TUYỆT ĐỐI KHÔNG cộng trùng (+C2) + (+TK/QT).
     """
@@ -407,9 +441,9 @@ def compute_tq_metrics(
         val = item["so_tien"]
         ngay_ht_dt = item.get("ngay_ht")
 
-        # Với GTGT (1701) khi doanh nghiệp lệch kỳ (VD bắt đầu tháng 4):
+        # Với GTGT (1701) hoặc Toàn bộ Thuế Nhà Thầu (is_ntnn=True: cả 1701 & 1052) khi doanh nghiệp lệch kỳ (VD tháng 4):
         # quy đổi cả ky_y và ht_y sang Năm tài chính lệch kỳ!
-        if tm == "1701" and fiscal_start_month > 1:
+        if fiscal_start_month > 1 and (tm == "1701" or is_ntnn):
             ky_y = extract_ky_fiscal_year(ky, ngay_ht_dt, fiscal_start_month)
             if ngay_ht_dt is not None:
                 ht_y = ngay_ht_dt.year if ngay_ht_dt.month >= fiscal_start_month else ngay_ht_dt.year - 1
@@ -1027,12 +1061,18 @@ def integrate_tq_and_qhns_into_workbook(
                 signed_v = val
             tncn_pp_other_by_ky[item["ky_year"]] += signed_v
 
-    # 2b. Tính chỉ số Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) nếu có
+    # 2b. Tính chỉ số Sổ Tổng Quan Thuế Nhà Thầu (TQ_NTNN) nếu có — áp dụng cùng năm tài chính lệch kỳ như GTGT
     ntnn_metrics: Optional[Dict[str, Any]] = None
     if all_ntnn_rows:
         ntnn_rows, other_ntnn_rows = split_tq_rows_by_cqt(all_ntnn_rows, norm_cqt)
         other_cqt_entries.extend([("TQ_NTNN", r) for r in other_ntnn_rows])
-        ntnn_metrics = compute_tq_metrics(ntnn_rows, start_year, end_year)
+        ntnn_metrics = compute_tq_metrics(
+            ntnn_rows,
+            start_year,
+            end_year,
+            fiscal_start_month=eff_fiscal_month,
+            is_ntnn=True,
+        )
 
     # 3. Chép sheet TQ (và TQ_NTNN nếu có) vào workbook đích
     if ws_tq_src is not None and has_main_tq:
@@ -2112,9 +2152,14 @@ def integrate_period_reconciliation_for_tax_type(
                 tq_nop_map[(pk, "1701")] += _signed_pay(it)
 
     elif tt == "NTNN":
-        # Đọc từng kỳ trên 'So Thue NTNN Cuoi' (Cột F=Kỳ kê khai, N=GTGT NTNN, P=TNDN NTNN)
-        if "So Thue NTNN Cuoi" in wb.sheetnames:
-            ws_n = wb["So Thue NTNN Cuoi"]
+        # Đọc từng kỳ trên 'So Thue NTNN Cuoi (Lech ky)' (nếu có) hoặc 'So Thue NTNN Cuoi' (Cột F=Kỳ kê khai, O=GTGT NTNN, Q=TNDN NTNN)
+        ntnn_src_sheet = (
+            "So Thue NTNN Cuoi (Lech ky)"
+            if "So Thue NTNN Cuoi (Lech ky)" in wb.sheetnames
+            else ("So Thue NTNN Cuoi" if "So Thue NTNN Cuoi" in wb.sheetnames else None)
+        )
+        if ntnn_src_sheet:
+            ws_n = wb[ntnn_src_sheet]
             ntnn_decl_rows_g: Dict[Tuple[int, int, int, str], List[int]] = defaultdict(list)
             ntnn_decl_rows_t: Dict[Tuple[int, int, int, str], List[int]] = defaultdict(list)
             for r in range(2, ws_n.max_row + 1):
@@ -2127,11 +2172,11 @@ def integrate_period_reconciliation_for_tax_type(
                 ntnn_decl_rows_g[pk].append(r)
                 ntnn_decl_rows_t[pk].append(r)
             for pk, rlist in ntnn_decl_rows_g.items():
-                expr_g = "=" + "+".join(f"'So Thue NTNN Cuoi'!O{rr}" for rr in rlist)
-                val_g = sum(_eval_simple_formula(wb, wb_v, "So Thue NTNN Cuoi", f"O{rr}") for rr in rlist)
+                expr_g = "=" + "+".join(f"'{ntnn_src_sheet}'!O{rr}" for rr in rlist)
+                val_g = sum(_eval_simple_formula(wb, wb_v, ntnn_src_sheet, f"O{rr}") for rr in rlist)
                 decl_map[(pk, "1701")] = (expr_g, val_g)
-                expr_t = "=" + "+".join(f"'So Thue NTNN Cuoi'!Q{rr}" for rr in rlist)
-                val_t = sum(_eval_simple_formula(wb, wb_v, "So Thue NTNN Cuoi", f"Q{rr}") for rr in rlist)
+                expr_t = "=" + "+".join(f"'{ntnn_src_sheet}'!Q{rr}" for rr in rlist)
+                val_t = sum(_eval_simple_formula(wb, wb_v, ntnn_src_sheet, f"Q{rr}") for rr in rlist)
                 decl_map[(pk, "1052")] = (expr_t, val_t)
         for it in main_rows:
             if it["tm"] not in ("1701", "1052") or it["gd"] == "BT":
@@ -2378,16 +2423,21 @@ def export_qhns_by_tax_type_period_files(
                 if start_year <= pk[0] <= end_year:
                     decl_gtgt_by_pk[pk] = _eval_simple_formula(wb_decl, wb_decl_v, "So Thue GTGT Cuoi", f"{gtgt_col}{r}")
 
-        if "So Thue NTNN Cuoi" in wb_decl.sheetnames:
-            ws_n = wb_decl["So Thue NTNN Cuoi"]
+        ntnn_decl_sheet = (
+            "So Thue NTNN Cuoi (Lech ky)"
+            if "So Thue NTNN Cuoi (Lech ky)" in wb_decl.sheetnames
+            else ("So Thue NTNN Cuoi" if "So Thue NTNN Cuoi" in wb_decl.sheetnames else None)
+        )
+        if ntnn_decl_sheet:
+            ws_n = wb_decl[ntnn_decl_sheet]
             for r in range(2, ws_n.max_row + 1):
                 ky_raw = str(ws_n.cell(r, 6).value or "").strip()
                 if not ky_raw or "tổng cộng" in ky_raw.lower():
                     continue
                 pk = normalize_period_key(ky_raw)
                 if start_year <= pk[0] <= end_year:
-                    decl_ntnn_by_pk_tm[(pk, "1701")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"O{r}")
-                    decl_ntnn_by_pk_tm[(pk, "1052")] += _eval_simple_formula(wb_decl, wb_decl_v, "So Thue NTNN Cuoi", f"Q{r}")
+                    decl_ntnn_by_pk_tm[(pk, "1701")] += _eval_simple_formula(wb_decl, wb_decl_v, ntnn_decl_sheet, f"O{r}")
+                    decl_ntnn_by_pk_tm[(pk, "1052")] += _eval_simple_formula(wb_decl, wb_decl_v, ntnn_decl_sheet, f"Q{r}")
 
         for y in years:
             sname = str(y)

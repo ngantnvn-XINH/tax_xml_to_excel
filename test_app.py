@@ -1840,6 +1840,78 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_th.cell(2, 20).value, 25_000_000)    # (12) Thuế TNDN phải nộp
             self.assertEqual(ws_th.cell(2, 21).value, 25_000_000)    # (13) Tổng thuế phải nộp NSNN
 
+    def test_v16_offset_fiscal_year_ntnn_export_and_qhns(self) -> None:
+        """Kiểm thử v1.6: Đơn vị lệch kỳ (01/04..31/03) tổng hợp 'So Thue NTNN Cuoi (Lech ky)', link C95/C97/C98 và QHNS TQ_NTNN lệch kỳ giống GTGT."""
+        from excel_exporter import export_to_excel
+        from qhns_summarizer import compute_tq_metrics, detect_fiscal_start_month
+        from tax_parser import TaxDeclaration
+
+        # TNDN lệch kỳ 01/04/2020..31/03/2021 để kích hoạt fiscal_ranges
+        d_tndn = TaxDeclaration(
+            file_path="tndn_2020.xml", file_name="tndn_2020.xml",
+            mst="0100000088", ten_nnt="CTY LECH KY TEST",
+            ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN",
+            ky_kkhai="2020", tu_ngay=datetime.date(2020, 4, 1), den_ngay=datetime.date(2021, 3, 31),
+            so_lan="0", ngay_lap=datetime.date(2021, 6, 15),
+            indicators={"A1": 0, "E": 0},
+        )
+        # NTNN kỳ 02/2020 -> thuộc năm tài chính 2019 (trước 04/2020)
+        d_nt_prior = TaxDeclaration(
+            file_path="nt_02_2020.xml", file_name="nt_02_2020.xml",
+            mst="0100000089", ten_nnt="CTY LECH KY TEST (NTNN)",
+            ma_tkhai="41", ten_tkhai="01/NTNN", tax_type="NTNN",
+            ky_kkhai="02/2020", tu_ngay=datetime.date(2020, 2, 1), den_ngay=datetime.date(2020, 2, 29),
+            so_lan="0", ngay_lap=datetime.date(2020, 3, 10),
+            indicators={"ct4": 100_000_000, "tong_ct6": 100_000_000, "tong_ct9": 5_000_000, "tong_ct10": 100_000_000, "tong_ct13": 5_000_000, "tong_ct14": 10_000_000},
+        )
+        # NTNN kỳ 02/2021 -> thuộc năm tài chính 2020 (04/2020..03/2021)
+        d_nt_fy20 = TaxDeclaration(
+            file_path="nt_02_2021.xml", file_name="nt_02_2021.xml",
+            mst="0100000089", ten_nnt="CTY LECH KY TEST (NTNN)",
+            ma_tkhai="41", ten_tkhai="01/NTNN", tax_type="NTNN",
+            ky_kkhai="02/2021", tu_ngay=datetime.date(2021, 2, 1), den_ngay=datetime.date(2021, 2, 28),
+            so_lan="0", ngay_lap=datetime.date(2021, 3, 10),
+            indicators={"ct4": 200_000_000, "tong_ct6": 200_000_000, "tong_ct9": 10_000_000, "tong_ct10": 200_000_000, "tong_ct13": 10_000_000, "tong_ct14": 20_000_000},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_x = os.path.join(tmpdir, "out_ntnn_lk.xlsx")
+            export_to_excel([d_tndn, d_nt_prior, d_nt_fy20], out_x)
+            wb = openpyxl.load_workbook(out_x, data_only=False)
+            self.assertIn("So Thue NTNN Cuoi (Lech ky)", wb.sheetnames)
+            self.assertEqual(detect_fiscal_start_month(wb), 4)
+            ws_lk = wb["So Thue NTNN Cuoi (Lech ky)"]
+            # Kỳ 02/2020 phải nằm dưới nhóm năm 2019; kỳ 02/2021 nằm dưới nhóm năm 2020 (04/2020-03/2021)
+            col_f_vals = [str(ws_lk.cell(r, 6).value or "") for r in range(2, ws_lk.max_row + 1)]
+            self.assertTrue(any("Tổng cộng năm 2019" in v for v in col_f_vals))
+            self.assertTrue(any("Tổng cộng năm 2020 (04/2020-03/2021)" in v for v in col_f_vals))
+            # Sheet '2020' phải link C95, C97, C98 về 'So Thue NTNN Cuoi (Lech ky)'
+            self.assertIn("'So Thue NTNN Cuoi (Lech ky)'!M", str(wb["2020"]["C95"].value))
+            self.assertIn("'So Thue NTNN Cuoi (Lech ky)'!O", str(wb["2020"]["C97"].value))
+            self.assertIn("'So Thue NTNN Cuoi (Lech ky)'!Q", str(wb["2020"]["C98"].value))
+
+        # Kiểm tra QHNS TQ_NTNN lệch kỳ (tháng 4):
+        # - Kỳ 02/2020 (và ngày 15/03/2020) nộp sang 04/2020 -> thuộc đầu kỳ năm tài chính 2020 (KHÔNG cộng trùng C2+TK)
+        # - Kỳ 02/2021 -> thuộc phát sinh năm tài chính 2020
+        ntnn_tq_rows = [
+            {"tm": "1701", "gd": "TK", "ky": "02/2020", "ky_year": 2020, "ht_year": 2020, "ngay_ht": datetime.datetime(2020, 3, 20), "so_tien": 5_000_000, "no_co": ""},
+            {"tm": "1701", "gd": "C2", "ky": "02/2020", "ky_year": 2020, "ht_year": 2020, "ngay_ht": datetime.datetime(2020, 4, 5), "so_tien": -5_000_000, "no_co": ""},
+            {"tm": "1052", "gd": "TK", "ky": "15/03/2020", "ky_year": 2020, "ht_year": 2020, "ngay_ht": datetime.datetime(2020, 3, 25), "so_tien": 8_000_000, "no_co": ""},
+            {"tm": "1052", "gd": "C2", "ky": "15/03/2020", "ky_year": 2020, "ht_year": 2020, "ngay_ht": datetime.datetime(2020, 4, 10), "so_tien": -8_000_000, "no_co": ""},
+            {"tm": "1701", "gd": "TK", "ky": "02/2021", "ky_year": 2021, "ht_year": 2021, "ngay_ht": datetime.datetime(2021, 3, 20), "so_tien": 10_000_000, "no_co": ""},
+            {"tm": "1052", "gd": "TK", "ky": "02/2021", "ky_year": 2021, "ht_year": 2021, "ngay_ht": datetime.datetime(2021, 3, 20), "so_tien": 12_000_000, "no_co": ""},
+        ]
+        m_nt = compute_tq_metrics(ntnn_tq_rows, 2020, 2020, fiscal_start_month=4, is_ntnn=True)
+        # Số đầu kỳ 2020: GTGT NTNN = 5tr, TNDN NTNN = 8tr (KHÔNG cộng trùng C2+TK)
+        self.assertEqual(round(m_nt["opening_exact"]["1701"]), 5_000_000)
+        self.assertEqual(round(m_nt["opening_exact"]["1052"]), 8_000_000)
+        # Phát sinh trong năm tài chính 2020 (04/2020..03/2021): GTGT NTNN = 10tr, TNDN NTNN = 12tr
+        self.assertEqual(round(m_nt["gtgt_tk_by_ky"][2020]), 10_000_000)
+        self.assertEqual(round(m_nt["tndn_tk_qt_by_ky"][2020]), 12_000_000)
+        # Đã nộp trong năm tài chính 2020 (từ tháng 4/2020): 5tr GTGT + 8tr TNDN (nộp kỳ trước sang)
+        self.assertEqual(round(m_nt["gtgt_c2_by_ht"][2020]), 5_000_000)
+        self.assertEqual(round(m_nt["tndn_c2_by_ht"][2020]), 8_000_000)
+
 
 if __name__ == "__main__":
     unittest.main()

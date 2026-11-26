@@ -3632,6 +3632,14 @@ def _populate_workbook_sheets(
         from ntnn_exporter import write_ntnn_cuoi_sheet, write_ntnn_timeline_sheet
         write_ntnn_timeline_sheet(wb, ntnn_items, existing_sheets, sheet_name="So Thue NTNN TH")
         write_ntnn_cuoi_sheet(wb, ntnn_items, existing_sheets, sheet_name="So Thue NTNN Cuoi")
+        if fiscal_ranges:
+            write_ntnn_cuoi_sheet(
+                wb,
+                ntnn_items,
+                existing_sheets,
+                sheet_name="So Thue NTNN Cuoi (Lech ky)",
+                fiscal_ranges=fiscal_ranges,
+            )
 
     if gtgt_items or tndn_items:
         write_sheet_chenh_lech_gtgt_tndn(
