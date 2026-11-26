@@ -335,6 +335,87 @@ def write_sheet_kiem_soat_gtgt(
     return ws
 
 
+def _kq_cell_ref(
+    kq_sheet: Optional[str],
+    kq_coords: Dict[int, Tuple[str, Dict[str, int]]],
+    yr: int,
+    logical_field: str,
+) -> Any:
+    """
+    Ánh xạ chính xác mã chỉ tiêu trên sheet 'BCHDKD' (Phụ lục 03-1A/TNDN) cho cả 2 thông tư:
+    - TT80/2021 (>=2021): [04]=DT bán hàng, [06]=Giảm trừ DT, [09]=Hàng bán bị trả lại,
+      [10]=DT HĐTC, [11]=Lãi tiền gửi, [13]=Giá vốn, [14]=CP bán hàng, [15]=CP QLDN,
+      [16]=CP tài chính, [17]=CP lãi vay, [18]=LN thuần HĐKD, [19]=Thu nhập khác, [20]=Chi phí khác.
+    - TT156/2013 (<=2020): [01]=DT bán hàng, [03]=Giảm trừ DT, [06]=Hàng bán bị trả lại,
+      [08]=DT HĐTC, [10]=Giá vốn, [11]=CP bán hàng, [12]=CP QLDN,
+      [13]=CP tài chính, [14]=CP lãi vay, [15]=LN thuần HĐKD, [16]=Thu nhập khác, [17]=Chi phí khác.
+    - Fallback mã BCTC KQKD chuẩn (01, 02, 10, 11, 21, 22, 23, 25, 26, 30, 31, 32) nếu sheet dùng mã trần.
+    """
+    if not kq_sheet or yr not in kq_coords:
+        return 0
+    col_l, cmap = kq_coords[yr]
+    is_tt80 = ("[04]" in cmap and "[18]" in cmap) or ("[13]" in cmap and "[17]" in cmap and "[22]" in cmap)
+    is_tt156 = ("[01]" in cmap and "[15]" in cmap and "[19]" in cmap)
+
+    tt80_map = {
+        "dt_ban_hang": ("[04]",),
+        "giam_tru_dt": ("[06]",),
+        "hang_ban_tra_lai": ("[09]", "[06]"),
+        "dt_tai_chinh": ("[10]",),
+        "lai_tien_gui": ("[11]", "[10]"),
+        "gia_von": ("[13]",),
+        "cp_ban_hang": ("[14]",),
+        "cp_qldn": ("[15]",),
+        "cp_tai_chinh": ("[16]",),
+        "cp_lai_vay": ("[17]",),
+        "ln_thuan": ("[18]",),
+        "thu_nhap_khac": ("[19]",),
+        "chi_phi_khac": ("[20]",),
+    }
+    tt156_map = {
+        "dt_ban_hang": ("[01]",),
+        "giam_tru_dt": ("[03]",),
+        "hang_ban_tra_lai": ("[06]", "[03]"),
+        "dt_tai_chinh": ("[08]",),
+        "lai_tien_gui": ("[08]",),
+        "gia_von": ("[10]",),
+        "cp_ban_hang": ("[11]",),
+        "cp_qldn": ("[12]",),
+        "cp_tai_chinh": ("[13]",),
+        "cp_lai_vay": ("[14]",),
+        "ln_thuan": ("[15]",),
+        "thu_nhap_khac": ("[16]",),
+        "chi_phi_khac": ("[17]",),
+    }
+    bctc_fallback = {
+        "dt_ban_hang": ("01",),
+        "giam_tru_dt": ("02",),
+        "hang_ban_tra_lai": ("02",),
+        "dt_tai_chinh": ("21",),
+        "lai_tien_gui": ("21",),
+        "gia_von": ("11",),
+        "cp_ban_hang": ("25",),
+        "cp_qldn": ("26",),
+        "cp_tai_chinh": ("22",),
+        "cp_lai_vay": ("23",),
+        "ln_thuan": ("30",),
+        "thu_nhap_khac": ("31",),
+        "chi_phi_khac": ("32",),
+    }
+
+    if is_tt80:
+        cand_codes = tt80_map.get(logical_field, ())
+    elif is_tt156:
+        cand_codes = tt156_map.get(logical_field, ())
+    else:
+        cand_codes = bctc_fallback.get(logical_field, ())
+
+    for cd in cand_codes:
+        if cd in cmap:
+            return f"='{kq_sheet}'!{col_l}{cmap[cd]}"
+    return 0
+
+
 def write_sheet_phan_tich_rui_ro(
     wb: openpyxl.Workbook,
     existing_sheets: Set[str],
@@ -407,27 +488,20 @@ def write_sheet_phan_tich_rui_ro(
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 
-    def _kq_ref(yr: int, code: str) -> Any:
-        if kq_sheet and yr in kq_coords:
-            col_l, cmap = kq_coords[yr]
-            if code in cmap:
-                return f"='{kq_sheet}'!{col_l}{cmap[code]}"
-        return 0
-
     r_start = 5
     r_tot = r_start + len(years)
     for idx, yr in enumerate(years, start=1):
         r = r_start + idx - 1
         ws.cell(r, 1, idx).alignment = al_c
         ws.cell(r, 2, yr).alignment = al_c
-        ws.cell(r, 3, _kq_ref(yr, "01"))
-        ws.cell(r, 4, _kq_ref(yr, "02"))
-        ws.cell(r, 5, _kq_ref(yr, "10"))
-        ws.cell(r, 6, _kq_ref(yr, "11"))
-        ws.cell(r, 7, _kq_ref(yr, "22"))
-        ws.cell(r, 8, _kq_ref(yr, "23"))
-        ws.cell(r, 9, _kq_ref(yr, "25"))
-        ws.cell(r, 10, _kq_ref(yr, "26"))
+        ws.cell(r, 3, _kq_cell_ref(kq_sheet, kq_coords, yr, "dt_ban_hang"))
+        ws.cell(r, 4, _kq_cell_ref(kq_sheet, kq_coords, yr, "giam_tru_dt"))
+        ws.cell(r, 5, f"=C{r}-D{r}")
+        ws.cell(r, 6, _kq_cell_ref(kq_sheet, kq_coords, yr, "gia_von"))
+        ws.cell(r, 7, _kq_cell_ref(kq_sheet, kq_coords, yr, "cp_tai_chinh"))
+        ws.cell(r, 8, _kq_cell_ref(kq_sheet, kq_coords, yr, "cp_lai_vay"))
+        ws.cell(r, 9, _kq_cell_ref(kq_sheet, kq_coords, yr, "cp_ban_hang"))
+        ws.cell(r, 10, _kq_cell_ref(kq_sheet, kq_coords, yr, "cp_qldn"))
         ws.cell(r, 11, f"=IF(E{r}>0,F{r}/E{r},0)")
         ws.cell(r, 12, f"=IF(E{r}>0,I{r}/E{r},0)")
         ws.cell(r, 13, f"=IF(E{r}>0,J{r}/E{r},0)")
@@ -517,8 +591,8 @@ def write_sheet_phan_tich_rui_ro(
         ws.cell(r, 4, _bctc_ref(yr, "141"))
         ws.cell(r, 5, _bctc_ref(yr, "311"))
         ws.cell(r, 6, _bctc_loan_ref(yr))
-        ws.cell(r, 7, _kq_ref(yr, "31"))
-        ws.cell(r, 8, _kq_ref(yr, "32"))
+        ws.cell(r, 7, _kq_cell_ref(kq_sheet, kq_coords, yr, "thu_nhap_khac"))
+        ws.cell(r, 8, _kq_cell_ref(kq_sheet, kq_coords, yr, "chi_phi_khac"))
         ws.cell(r, 9, f"='{yr}'!C83" if str(yr) in wb.sheetnames else 0)
         ws.cell(r, 10, _bctc_ref(yr, "411"))
         for ci in range(1, 11):
@@ -758,12 +832,15 @@ def write_sheet_gdlk_30ebitda(
             col_l = get_column_letter(col_i)
             cmt_txt = None
             if rr == r_ln:
-                val = _kq_val_expr(yr, "30")
+                val = _kq_cell_ref(kq_sheet, kq_coords, yr, "ln_thuan")
             elif rr == r_lv:
-                val = _kq_val_expr(yr, "23")
+                val = _kq_cell_ref(kq_sheet, kq_coords, yr, "cp_lai_vay")
             elif rr == r_ltg:
-                val = _kq_val_expr(yr, "21")
-                cmt_txt = "Tạm lấy mã [21] Doanh thu HĐTC trên BCHDKD. Vui lòng rà lại Thuyết minh BCTC/TK 515 để chỉ giữ phần Lãi tiền gửi & Lãi cho vay."
+                val = _kq_cell_ref(kq_sheet, kq_coords, yr, "lai_tien_gui")
+                cmt_txt = (
+                    "Với TT80 (>=2021): tự động lấy mã [11] Doanh thu từ lãi tiền gửi trên BCHDKD. "
+                    "Với TT156 (<=2020): tạm lấy mã [08] Doanh thu HĐTC -> vui lòng rà lại Thuyết minh BCTC/TK 515."
+                )
             elif rr == r_lv_net:
                 val = f"={col_l}{r_lv}-{col_l}{r_ltg}"
             elif rr == r_kh:

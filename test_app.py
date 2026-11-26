@@ -2102,16 +2102,23 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertEqual(ws_ks["G5"].value, "=D5-E5")
             self.assertIn("Cần KT phân bổ", str(ws_ks["M5"].value))
 
-            # Kiểm tra công thức trên PhanTich_RuiRo
+            # Kiểm tra công thức trên PhanTich_RuiRo (phải link thực sự sang 'BCHDKD' cho TT80 [04], [13], [14], [15], KHÔNG bị 0!)
             ws_rr = wb["PhanTich_RuiRo"]
             self.assertEqual(ws_rr["B5"].value, 2023)
+            self.assertIn("'BCHDKD'!", str(ws_rr["C5"].value))
+            self.assertIn("'BCHDKD'!", str(ws_rr["F5"].value))
+            self.assertIn("'BCHDKD'!", str(ws_rr["I5"].value))
+            self.assertIn("'BCHDKD'!", str(ws_rr["J5"].value))
+            self.assertEqual(ws_rr["E5"].value, "=C5-D5")
             self.assertIn("F5/E5", str(ws_rr["K5"].value))
 
-            # Kiểm tra công thức trên GDLK_30EBITDA (LCTTGT khấu hao = 400tr, công thức 30% EBITDA & GDLK)
+            # Kiểm tra công thức trên GDLK_30EBITDA (LCTTGT khấu hao = 400tr, LN thuần & Lãi vay link sang 'BCHDKD'!)
             ws_gd = wb["GDLK_30EBITDA"]
             self.assertIn("CÓ YẾU TỐ GDLK", str(ws_gd["C13"].value))
-            self.assertEqual(ws_gd["C21"].value, 400_000_000)  # Khấu hao lấy trực tiếp từ LCTTGT [02]
-            self.assertIn("0.3*C22", str(ws_gd["C23"].value))  # 30% EBITDA
+            self.assertIn("'BCHDKD'!", str(ws_gd["C17"].value))  # LN thuần [18]
+            self.assertIn("'BCHDKD'!", str(ws_gd["C18"].value))  # CP lãi vay [17]
+            self.assertEqual(ws_gd["C21"].value, 400_000_000)    # Khấu hao lấy trực tiếp từ LCTTGT [02]
+            self.assertIn("0.3*C22", str(ws_gd["C23"].value))    # 30% EBITDA
 
     def test_v16_detect_fiscal_month_and_ntnn_tq_date_formats(self) -> None:
         """Kiểm thử v1.6: Nhận diện đúng tháng bắt đầu lệch kỳ ngay cả khi kỳ đầu là tháng 01 (thuộc NTC trước) & quy đổi đúng mọi định dạng kỳ ngày trên TQ_NTNN."""
@@ -2137,6 +2144,11 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertEqual(extract_ky_fiscal_year(datetime.datetime(2021, 2, 15), None, 4), 2020)
         self.assertEqual(extract_ky_fiscal_year("2021/02", None, 4), 2020)
         self.assertEqual(extract_ky_fiscal_year("210415", datetime.datetime(2021, 4, 20), 4), 2021)
+        # Kỳ 03/2024 (nộp/hạch toán tháng 04/2024) ở dạng float 2403.0 / hậu tố 2403L1 / 'PS 03/2024' phải về NTC 2023, KHÔNG nhảy sang 2024!
+        self.assertEqual(extract_ky_fiscal_year(2403.0, datetime.datetime(2024, 4, 15), 4), 2023)
+        self.assertEqual(extract_ky_fiscal_year("2403.0", datetime.datetime(2024, 4, 15), 4), 2023)
+        self.assertEqual(extract_ky_fiscal_year("2403L1", datetime.datetime(2024, 4, 15), 4), 2023)
+        self.assertEqual(extract_ky_fiscal_year("PS 03/2024", datetime.datetime(2024, 4, 15), 4), 2023)
 
 
 if __name__ == "__main__":

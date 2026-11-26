@@ -76,7 +76,12 @@ def extract_ky_fiscal_year(
     if isinstance(ky_val, (datetime.datetime, datetime.date)):
         return ky_val.year if ky_val.month >= fiscal_start_month else ky_val.year - 1
     if ky_val is not None:
-        s = str(ky_val).strip().upper()
+        if isinstance(ky_val, float) and ky_val.is_integer():
+            s = str(int(ky_val))
+        else:
+            s = str(ky_val).strip().upper()
+            if s.endswith(".0") and s[:-2].isdigit():
+                s = s[:-2]
         # 1. Định dạng YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD (bao gồm cả chuỗi '2021-02-15 00:00:00')
         m_iso = re.search(r"(20\d{2})[/.\-](0?[1-9]|1[0-2])[/.\-](\d{1,2})", s)
         if m_iso:
@@ -107,29 +112,29 @@ def extract_ky_fiscal_year(
                 if ngay_ht and abs(y2 - ngay_ht.year) < abs(y4 - ngay_ht.year):
                     return y2 if m_mid >= fiscal_start_month else y2 - 1
                 return y4 if m_tail >= fiscal_start_month else y4 - 1
-        # 5. Định dạng 4 chữ số YYMM (VD: 2102)
-        m_ym = re.match(r"^(\d{2})(0[1-9]|1[0-2])$", s)
+        # 5. Định dạng 4 chữ số YYMM (VD: 2102, 2403 hoặc có hậu tố như 2403L1 / 2403PS)
+        m_ym = re.match(r"^(\d{2})(0[1-9]|1[0-2])(?:\D.*)?$", s)
         if m_ym:
             yr, mo = 2000 + int(m_ym.group(1)), int(m_ym.group(2))
             return yr if mo >= fiscal_start_month else yr - 1
         # 6. Định dạng quý YYQ1..4
-        m_yq = re.match(r"^(\d{2})Q([1-4])$", s)
+        m_yq = re.search(r"\b(\d{2})Q([1-4])\b", s)
         if m_yq:
             yr, q = 2000 + int(m_yq.group(1)), int(m_yq.group(2))
             q_mo = (q - 1) * 3 + 1
             return yr if q_mo >= fiscal_start_month else yr - 1
-        # 7. Định dạng MM/YYYY hoặc T02/2021 hoặc MM.YYYY
-        m_mfull = re.match(r"^T?(0?[1-9]|1[0-2])[/.\-](20\d{2})$", s)
+        # 7. Định dạng MM/YYYY hoặc T02/2021 hoặc có tiền tố/hậu tố (VD: 'PS 03/2024', '03/2024 (BS)')
+        m_mfull = re.search(r"(?:^|[^0-9])T?(0?[1-9]|1[0-2])[/.\-](20\d{2})(?:$|[^0-9])", s)
         if m_mfull:
             mo, yr = int(m_mfull.group(1)), int(m_mfull.group(2))
             return yr if mo >= fiscal_start_month else yr - 1
         # 8. Định dạng YYYY/MM hoặc YYYY-MM
-        m_ymfull = re.match(r"^(20\d{2})[/.\-](0?[1-9]|1[0-2])$", s)
+        m_ymfull = re.search(r"(?:^|[^0-9])(20\d{2})[/.\-](0?[1-9]|1[0-2])(?:$|[^0-9])", s)
         if m_ymfull:
             yr, mo = int(m_ymfull.group(1)), int(m_ymfull.group(2))
             return yr if mo >= fiscal_start_month else yr - 1
         # 9. Định dạng Q1/2021
-        m_qfull = re.match(r"^Q([1-4])[/.\-](20\d{2})$", s)
+        m_qfull = re.search(r"Q([1-4])[/.\-](20\d{2})", s)
         if m_qfull:
             q, yr = int(m_qfull.group(1)), int(m_qfull.group(2))
             q_mo = (q - 1) * 3 + 1
@@ -326,7 +331,13 @@ def parse_tq_rows(ws_tq) -> List[Dict[str, Any]]:
             tm = str(int(raw_tm))
         else:
             tm = str(raw_tm or "").strip()
-        ky = str(ws_tq.cell(r, col_map["ky"]).value or "").strip().upper()
+        raw_ky = ws_tq.cell(r, col_map["ky"]).value
+        if isinstance(raw_ky, float) and raw_ky.is_integer():
+            ky = str(int(raw_ky))
+        else:
+            ky = str(raw_ky or "").strip().upper()
+            if ky.endswith(".0") and ky[:-2].isdigit():
+                ky = ky[:-2]
         no_co = ""
         if "no_co" in col_map:
             no_co = str(ws_tq.cell(r, col_map["no_co"]).value or "").strip().upper()
