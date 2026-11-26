@@ -2150,6 +2150,19 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertEqual(extract_ky_fiscal_year("2403L1", datetime.datetime(2024, 4, 15), 4), 2023)
         self.assertEqual(extract_ky_fiscal_year("PS 03/2024", datetime.datetime(2024, 4, 15), 4), 2023)
 
+        # 3. Kiểm tra detect_tndn_fiscal_ranges chống lỗi gõ nhầm Đến ngày 30/06/2024 (15 tháng) cho NTC 04/2023-03/2024
+        from excel_exporter import detect_tndn_fiscal_ranges
+        from tax_parser import TaxDeclaration
+        d22 = TaxDeclaration(file_path="t22.xml", file_name="t22.xml", mst="0100000011", ten_nnt="CTY X", ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN", ky_kkhai="2022", tu_ngay=datetime.date(2022, 4, 1), den_ngay=datetime.date(2023, 3, 31))
+        d23 = TaxDeclaration(file_path="t23.xml", file_name="t23.xml", mst="0100000011", ten_nnt="CTY X", ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN", ky_kkhai="2023", tu_ngay=datetime.date(2023, 4, 1), den_ngay=datetime.date(2024, 6, 30))
+        d24 = TaxDeclaration(file_path="t24.xml", file_name="t24.xml", mst="0100000011", ten_nnt="CTY X", ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN", ky_kkhai="2024", tu_ngay=datetime.date(2024, 4, 1), den_ngay=datetime.date(2025, 3, 31))
+        fr = detect_tndn_fiscal_ranges([d22, d23, d24])
+        self.assertEqual(fr[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 3, 31)))
+        self.assertEqual(fr[2024], (datetime.date(2024, 4, 1), datetime.date(2025, 3, 31)))
+        # Ngay cả khi chưa có tờ khai 2024, 04/2023-06/2024 vẫn tự chuẩn hóa về 04/2023-03/2024!
+        fr_no24 = detect_tndn_fiscal_ranges([d22, d23])
+        self.assertEqual(fr_no24[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 3, 31)))
+
 
 if __name__ == "__main__":
     unittest.main()

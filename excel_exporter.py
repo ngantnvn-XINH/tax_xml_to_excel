@@ -2178,7 +2178,14 @@ def detect_tndn_fiscal_ranges(tndn_decls: List[TaxDeclaration]) -> Dict[int, Tup
     Tự động phát hiện doanh nghiệp có năm tài chính lệch năm dương lịch từ tờ khai 03/TNDN
     (VD: 01/04/2019 - 31/03/2020 cho năm tính thuế 2019).
     Trả về dict {year: (tu_ngay, den_ngay)} nếu có lệch kỳ; ngược lại trả về {}.
+    Tự động xử lý 2 lỗi thực tế thường gặp trong XML 03/TNDN:
+    1. Năm Y có den_ngay chồng lấn sang tu_ngay của năm Y+1 (VD kế toán gõ nhầm hạn nộp 30/06/2024 vào Đến ngày của năm 2023)
+       -> tự động cắt den_ngay về sát trước tu_ngay năm Y+1 (31/03/2024).
+    2. Năm Y kéo dài bất thường > 12 tháng (> 370 ngày) trong khi các năm khác cùng chu kỳ 12 tháng chuẩn
+       -> tự động chuẩn hóa về đúng 12 tháng (VD: 01/04/2023 - 31/03/2024).
     """
+    import calendar as _cal
+
     ranges: Dict[int, Tuple[datetime.date, datetime.date]] = {}
     has_offset = False
     for d in tndn_decls:
@@ -2186,7 +2193,35 @@ def detect_tndn_fiscal_ranges(tndn_decls: List[TaxDeclaration]) -> Dict[int, Tup
             ranges[d.year] = (d.tu_ngay, d.den_ngay)
             if d.tu_ngay.month != 1 or d.den_ngay.month != 12 or d.tu_ngay.year != d.den_ngay.year:
                 has_offset = True
-    return ranges if has_offset else {}
+    if not has_offset:
+        return {}
+
+    # Xác định tháng bắt đầu phổ biến của các năm 12 tháng chuẩn (<= 370 ngày)
+    normal_starts = [
+        s.month for s, e in ranges.values()
+        if 350 <= (e - s).days <= 370 and s.month > 1
+    ]
+    common_start_m = max(set(normal_starts), key=normal_starts.count) if normal_starts else None
+
+    sorted_yrs = sorted(ranges.keys())
+    for yr in sorted_yrs:
+        f_start, f_end = ranges[yr]
+        # 1. Không cho phép chồng lấn sang năm kế tiếp
+        if (yr + 1) in ranges:
+            next_start = ranges[yr + 1][0]
+            if f_end >= next_start:
+                f_end = next_start - datetime.timedelta(days=1)
+        # 2. Nếu vẫn vượt quá 12 tháng (> 370 ngày) khi doanh nghiệp có chu kỳ lệch kỳ 12 tháng ổn định
+        #    (VD kế toán gõ nhầm hạn nộp 30/06/2024 vào Đến ngày của kỳ 04/2023-03/2024)
+        if (f_end - f_start).days > 370 and f_start.month > 1:
+            if common_start_m is None or f_start.month == common_start_m:
+                end_m = f_start.month - 1
+                end_y = f_start.year + 1
+                last_d = _cal.monthrange(end_y, end_m)[1]
+                f_end = datetime.date(end_y, end_m, last_d)
+        ranges[yr] = (f_start, f_end)
+
+    return ranges
 
 
 def write_gtgt_cuoi_sheet(
