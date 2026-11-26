@@ -886,13 +886,17 @@ def write_audit_analytics_sheets(
     wb: openpyxl.Workbook,
     existing_sheets: Set[str],
     bctc_decls: Optional[Sequence[Any]] = None,
+    selected_sheets: Optional[Set[str]] = None,
 ) -> List[str]:
-    """Tạo toàn bộ các sheet phụ trợ kiểm soát & phân tích rủi ro (không đụng chạm sheet gốc)."""
+    """Tạo các sheet phụ trợ kiểm soát & phân tích rủi ro theo danh sách selected_sheets (không đụng chạm sheet gốc)."""
+    def _want(key: str) -> bool:
+        return selected_sheets is None or key in selected_sheets
+
     created: List[str] = []
-    if write_sheet_kiem_soat_gtgt(wb, existing_sheets) is not None:
+    if _want("kiem_soat_gtgt") and write_sheet_kiem_soat_gtgt(wb, existing_sheets) is not None:
         created.append("KiemSoat_GTGT")
-    if write_sheet_phan_tich_rui_ro(wb, existing_sheets) is not None:
+    if _want("phan_tich_rui_ro") and write_sheet_phan_tich_rui_ro(wb, existing_sheets) is not None:
         created.append("PhanTich_RuiRo")
-    if write_sheet_gdlk_30ebitda(wb, existing_sheets, bctc_decls=bctc_decls) is not None:
+    if _want("gdlk_ebitda") and write_sheet_gdlk_30ebitda(wb, existing_sheets, bctc_decls=bctc_decls) is not None:
         created.append("GDLK_30EBITDA")
     return created

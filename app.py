@@ -28,8 +28,8 @@ class TaxXmlToExcelApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(f"Chuyển đổi Tờ khai Thuế XML & Đối chiếu QHNS (GTGT, TNCN, TNDN, BCTC, NTNN, TQ) - {APP_VERSION}")
-        self.root.geometry("1140x760")
-        self.root.minsize(980, 620)
+        self.root.geometry("1180x820")
+        self.root.minsize(1020, 680)
 
         self.declarations: List[TaxDeclaration] = []
         self.file_paths_set: set[str] = set()
@@ -242,6 +242,56 @@ class TaxXmlToExcelApp:
             foreground="#555555",
         ).pack(side=tk.LEFT)
 
+        # Khung 2b: Tích chọn các sheet bổ trợ / đối chiếu / báo cáo muốn xuất (tờ khai gốc & biểu từng năm luôn xuất mặc định)
+        sheet_frame = ttk.LabelFrame(
+            self.root,
+            text="2b. Tích chọn các sheet tùy chọn xuất ra Excel (Tờ khai gốc & Biểu các năm luôn xuất mặc định)",
+            padding=(10, 6),
+        )
+        sheet_frame.pack(fill=tk.X, padx=12, pady=4)
+
+        self.sheet_vars: Dict[str, tk.BooleanVar] = {
+            "tong_hop": tk.BooleanVar(value=True),
+            "th_sheets": tk.BooleanVar(value=True),
+            "chenh_lech": tk.BooleanVar(value=True),
+            "cham_nop": tk.BooleanVar(value=True),
+            "bao_cao": tk.BooleanVar(value=True),
+            "kiem_soat_gtgt": tk.BooleanVar(value=True),
+            "phan_tich_rui_ro": tk.BooleanVar(value=True),
+            "gdlk_ebitda": tk.BooleanVar(value=True),
+            "qhns": tk.BooleanVar(value=True),
+            "doi_chieu_qhns": tk.BooleanVar(value=True),
+            "tq_raw": tk.BooleanVar(value=True),
+        }
+
+        row_sh1 = ttk.Frame(sheet_frame)
+        row_sh1.pack(fill=tk.X, pady=(0, 3))
+        for key, lbl in (
+            ("tong_hop", "Tong_Hop (DS file)"),
+            ("th_sheets", "Lịch sử (GTGT/NTNN TH)"),
+            ("chenh_lech", "Chênh lệch GTGT-TNDN"),
+            ("cham_nop", "Tinh_TienChamNop"),
+            ("bao_cao", "BaoCao_BienBan"),
+        ):
+            ttk.Checkbutton(row_sh1, text=lbl, variable=self.sheet_vars[key]).pack(side=tk.LEFT, padx=(0, 12))
+
+        ttk.Button(row_sh1, text="Chọn tất cả", width=12, command=self._select_all_sheets).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(row_sh1, text="Chỉ mẫu gốc", width=12, command=self._select_core_sheets).pack(side=tk.RIGHT, padx=(4, 0))
+
+        row_sh2 = ttk.Frame(sheet_frame)
+        row_sh2.pack(fill=tk.X)
+        for key, lbl in (
+            ("kiem_soat_gtgt", "KiemSoat_GTGT"),
+            ("phan_tich_rui_ro", "PhanTich_RuiRo"),
+            ("gdlk_ebitda", "GDLK_30EBITDA"),
+            ("qhns", "QHNS (Biên bản)"),
+            ("doi_chieu_qhns", "DoiChieu_QHNS"),
+            ("tq_raw", "Sổ gốc TQ / TQ_NTNN"),
+        ):
+            ttk.Checkbutton(row_sh2, text=lbl, variable=self.sheet_vars[key]).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Button(row_sh2, text="Bỏ chọn hết", width=12, command=self._clear_all_sheets).pack(side=tk.RIGHT, padx=(4, 0))
+
         # Bảng xem trước dữ liệu
         table_frame = ttk.Frame(self.root, padding=(12, 4, 12, 4))
         table_frame.pack(fill=tk.BOTH, expand=True)
@@ -388,6 +438,22 @@ class TaxXmlToExcelApp:
         if self.var_other.get():
             allowed.add("Khác")
         return allowed
+
+    def _selected_sheets(self) -> set[str]:
+        return {k for k, var in self.sheet_vars.items() if var.get()}
+
+    def _select_all_sheets(self) -> None:
+        for var in self.sheet_vars.values():
+            var.set(True)
+
+    def _select_core_sheets(self) -> None:
+        analytics_keys = {"kiem_soat_gtgt", "phan_tich_rui_ro", "gdlk_ebitda"}
+        for k, var in self.sheet_vars.items():
+            var.set(k not in analytics_keys)
+
+    def _clear_all_sheets(self) -> None:
+        for var in self.sheet_vars.values():
+            var.set(False)
 
     def add_files(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -569,6 +635,7 @@ class TaxXmlToExcelApp:
         y_from, y_to = self._get_year_bounds()
         cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
         target_cqt = self.var_target_cqt.get().strip() or None
+        selected_sheets = self._selected_sheets()
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
@@ -586,6 +653,7 @@ class TaxXmlToExcelApp:
                     split_by_year=split_years,
                     layout=layout_mode,
                     cutoff_date=cutoff_dt,
+                    selected_sheets=selected_sheets,
                 )
 
                 qhns_alerts: List[str] = []
@@ -602,6 +670,7 @@ class TaxXmlToExcelApp:
                         cutoff_date=cutoff_dt,
                         tq_ntnn_excel_path=valid_ntnn,
                         target_cqt=target_cqt,
+                        selected_sheets=selected_sheets,
                     )
                     qhns_alerts = qhns_res.get("alerts", [])
                     qhns_done = True
@@ -681,6 +750,7 @@ class TaxXmlToExcelApp:
         split_qhns = self.var_split_qhns.get()
         cutoff_dt = parse_cutoff_date(self.var_cutoff_date.get())
         target_cqt = self.var_target_cqt.get().strip() or None
+        selected_sheets = self._selected_sheets()
 
         self.btn_export.config(state=tk.DISABLED)
         self.btn_export_tncn.config(state=tk.DISABLED)
@@ -699,6 +769,7 @@ class TaxXmlToExcelApp:
                     cutoff_date=cutoff_dt,
                     tq_ntnn_excel_path=valid_ntnn,
                     target_cqt=target_cqt,
+                    selected_sheets=selected_sheets,
                 )
                 qhns_split_files: List[str] = []
                 if split_qhns:

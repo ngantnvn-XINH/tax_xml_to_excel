@@ -3623,11 +3623,16 @@ def _populate_workbook_sheets(
     valid_decls: List[TaxDeclaration],
     include_appendices: bool = True,
     cutoff_date: Optional[datetime.date] = None,
+    selected_sheets: Optional[Set[str]] = None,
 ) -> None:
-    """Điền đầy đủ các sheet dữ liệu chuẩn vào Workbook."""
+    """Điền các sheet dữ liệu chuẩn vào Workbook (lọc theo selected_sheets nếu người dùng tích chọn)."""
     existing_sheets: Set[str] = set()
 
-    write_summary_sheet(wb, all_decls, existing_sheets)
+    def _want(key: str) -> bool:
+        return selected_sheets is None or key in selected_sheets
+
+    if _want("tong_hop"):
+        write_summary_sheet(wb, all_decls, existing_sheets)
 
     tndn_items = [d for d in valid_decls if d.tax_type == "TNDN"]
     fiscal_ranges: Dict[int, Tuple[datetime.date, datetime.date]] = {}
@@ -3651,7 +3656,8 @@ def _populate_workbook_sheets(
 
     gtgt_items = [d for d in valid_decls if d.tax_type == "GTGT"]
     if gtgt_items:
-        write_gtgt_timeline_sheet(wb, gtgt_items, existing_sheets, sheet_name="So Thue GTGT TH")
+        if _want("th_sheets"):
+            write_gtgt_timeline_sheet(wb, gtgt_items, existing_sheets, sheet_name="So Thue GTGT TH")
         write_gtgt_cuoi_sheet(wb, gtgt_items, existing_sheets, sheet_name="So Thue GTGT Cuoi")
         if fiscal_ranges:
             write_gtgt_cuoi_sheet(
@@ -3665,7 +3671,8 @@ def _populate_workbook_sheets(
     ntnn_items = [d for d in valid_decls if d.tax_type == "NTNN"]
     if ntnn_items:
         from ntnn_exporter import write_ntnn_cuoi_sheet, write_ntnn_timeline_sheet
-        write_ntnn_timeline_sheet(wb, ntnn_items, existing_sheets, sheet_name="So Thue NTNN TH")
+        if _want("th_sheets"):
+            write_ntnn_timeline_sheet(wb, ntnn_items, existing_sheets, sheet_name="So Thue NTNN TH")
         write_ntnn_cuoi_sheet(wb, ntnn_items, existing_sheets, sheet_name="So Thue NTNN Cuoi")
         if fiscal_ranges:
             write_ntnn_cuoi_sheet(
@@ -3676,7 +3683,7 @@ def _populate_workbook_sheets(
                 fiscal_ranges=fiscal_ranges,
             )
 
-    if gtgt_items or tndn_items:
+    if _want("chenh_lech") and (gtgt_items or tndn_items):
         write_sheet_chenh_lech_gtgt_tndn(
             wb,
             existing_sheets,
@@ -3685,19 +3692,27 @@ def _populate_workbook_sheets(
         )
 
     if gtgt_items or tndn_items or tncn_items or ntnn_items:
+        # Biểu các năm (2020..2025) luôn xuất mặc định cùng các sheet tờ khai gốc
         write_yearly_verification_sheets(wb, existing_sheets)
-        from penalty_calculator import add_late_payment_sheet
-        from report_builder import add_audit_report_sheet
-        add_late_payment_sheet(
-            wb,
-            cutoff_date=cutoff_date,
-            fiscal_ranges=fiscal_ranges or None,
-        )
-        add_audit_report_sheet(wb)
+        if _want("cham_nop"):
+            from penalty_calculator import add_late_payment_sheet
+            add_late_payment_sheet(
+                wb,
+                cutoff_date=cutoff_date,
+                fiscal_ranges=fiscal_ranges or None,
+            )
+        if _want("bao_cao"):
+            from report_builder import add_audit_report_sheet
+            add_audit_report_sheet(wb)
 
     if gtgt_items or tndn_items or bctc_items:
         from audit_analytics import write_audit_analytics_sheets
-        write_audit_analytics_sheets(wb, existing_sheets, bctc_decls=bctc_items)
+        write_audit_analytics_sheets(
+            wb,
+            existing_sheets,
+            bctc_decls=bctc_items,
+            selected_sheets=selected_sheets,
+        )
 
     other_items = [d for d in valid_decls if d.tax_type == "Khác"]
     if other_items:
@@ -3705,6 +3720,10 @@ def _populate_workbook_sheets(
 
     if include_appendices and valid_decls:
         write_appendix_sheets(wb, valid_decls, existing_sheets)
+
+    # Đảm bảo workbook luôn có ít nhất 1 sheet hợp lệ để openpyxl lưu thành công
+    if not wb.sheetnames:
+        write_summary_sheet(wb, all_decls, existing_sheets)
 
 
 def export_to_excel(
@@ -3715,6 +3734,7 @@ def export_to_excel(
     split_by_year: bool = False,
     layout: str = "vertical",
     cutoff_date: Optional[datetime.date] = None,
+    selected_sheets: Optional[Set[str]] = None,
 ) -> List[str]:
     """
     Xuất danh sách TaxDeclaration ra file Excel chuẩn 100% mẫu người dùng (Phiên bản v1.2):
@@ -3797,7 +3817,14 @@ def export_to_excel(
                 continue
             wb = openpyxl.Workbook()
             wb.remove(wb.active)
-            _populate_workbook_sheets(wb, sub_decls, sub_decls, include_appendices=include_appendices)
+            _populate_workbook_sheets(
+                wb,
+                sub_decls,
+                sub_decls,
+                include_appendices=include_appendices,
+                cutoff_date=cutoff_date,
+                selected_sheets=selected_sheets,
+            )
             sub_path = f"{base_name}_{t_type}{ext}"
             wb.save(sub_path)
             created_files.append(sub_path)
@@ -3806,7 +3833,14 @@ def export_to_excel(
     # CHẾ ĐỘ 3: FILE GỘP TỔNG HỢP
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    _populate_workbook_sheets(wb, declarations, valid, include_appendices=include_appendices, cutoff_date=cutoff_date)
+    _populate_workbook_sheets(
+        wb,
+        declarations,
+        valid,
+        include_appendices=include_appendices,
+        cutoff_date=cutoff_date,
+        selected_sheets=selected_sheets,
+    )
     wb.save(output_path)
     created_files.append(output_path)
 

@@ -1108,6 +1108,7 @@ def integrate_tq_and_qhns_into_workbook(
     tq_ntnn_excel_path: Optional[str] = None,
     target_cqt: Optional[str] = "7901",
     fiscal_start_month: Optional[int] = None,
+    selected_sheets: Optional[set] = None,
 ) -> Dict[str, Any]:
     """
     Hàm tích hợp chính (hỗ trợ linh hoạt: chỉ có TQ công ty, chỉ có TQ_NTNN nhà thầu, hoặc cả 2):
@@ -1211,11 +1212,15 @@ def integrate_tq_and_qhns_into_workbook(
             fiscal_ranges=eff_fiscal_ranges,
         )
 
-    # 3. Chép sheet TQ (và TQ_NTNN nếu có) vào workbook đích
-    if ws_tq_src is not None and has_main_tq:
-        _copy_tq_sheet(wb, ws_tq_src, sheet_name="TQ")
-    if ws_ntnn_src is not None and ntnn_metrics is not None:
-        _copy_tq_sheet(wb, ws_ntnn_src, sheet_name="TQ_NTNN")
+    # 3. Chép sheet TQ (và TQ_NTNN nếu có) vào workbook đích (khi người dùng tích chọn tq_raw)
+    def _want(key: str) -> bool:
+        return selected_sheets is None or key in selected_sheets
+
+    if _want("tq_raw"):
+        if ws_tq_src is not None and has_main_tq:
+            _copy_tq_sheet(wb, ws_tq_src, sheet_name="TQ")
+        if ws_ntnn_src is not None and ntnn_metrics is not None:
+            _copy_tq_sheet(wb, ws_ntnn_src, sheet_name="TQ_NTNN")
 
     # 4. Cập nhật cột đối chiếu F, G và Comment trên từng sheet năm
     num_fmt = "#,##0"
@@ -2116,11 +2121,19 @@ def integrate_tq_and_qhns_into_workbook(
             f"({', '.join(other_cqts_list)}) sang sheet 'TQ_CQT_Khac' (KHÔNG gộp vào biểu QHNS của CQT {norm_cqt or '7901'})."
         )
 
-    # Cập nhật / bổ sung sheet biểu tính tiền chậm nộp & xử phạt VPHC và Báo cáo tổng hợp Biên bản
-    from penalty_calculator import add_late_payment_sheet
-    from report_builder import add_audit_report_sheet
-    add_late_payment_sheet(wb, years=years, cutoff_date=cutoff_date)
-    add_audit_report_sheet(wb, years=years)
+    # Cập nhật / bổ sung sheet biểu tính tiền chậm nộp & xử phạt VPHC và Báo cáo tổng hợp Biên bản (tôn trọng lựa chọn sheet)
+    if _want("cham_nop"):
+        from penalty_calculator import add_late_payment_sheet
+        add_late_payment_sheet(wb, years=years, cutoff_date=cutoff_date)
+    if _want("bao_cao"):
+        from report_builder import add_audit_report_sheet
+        add_audit_report_sheet(wb, years=years)
+
+    # Nếu người dùng bỏ tích DoiChieu_QHNS hoặc QHNS -> gỡ bỏ tương ứng (chỉ gỡ QHNS khi cả DoiChieu_QHNS cũng bỏ tích để tránh #REF!)
+    if not _want("doi_chieu_qhns") and "DoiChieu_QHNS" in wb.sheetnames:
+        del wb["DoiChieu_QHNS"]
+    if not _want("qhns") and not _want("doi_chieu_qhns") and "QHNS" in wb.sheetnames:
+        del wb["QHNS"]
 
     wb.save(output_path)
 

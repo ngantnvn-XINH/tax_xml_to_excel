@@ -2184,6 +2184,51 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertEqual(round(m_dis["tndn_tk_qt_by_ky"][2023]), 17_000_000)
         self.assertEqual(round(m_dis["tndn_c2_by_ht"][2023]), 17_000_000)
 
+    def test_v16_selected_sheets_filtering(self) -> None:
+        """Kiểm thử v1.6: Tích chọn sheet tùy chọn (tờ khai gốc & biểu từng năm luôn mặc định xuất)."""
+        from excel_exporter import export_to_excel
+        from tax_parser import TaxDeclaration
+
+        d_gt = TaxDeclaration(
+            file_path="gt_01_2023.xml", file_name="gt_01_2023.xml",
+            mst="0100000055", ten_nnt="CTY SELECT TEST",
+            ma_tkhai="01/GTGT", ten_tkhai="01/GTGT", tax_type="GTGT",
+            ky_kkhai="01/2023", tu_ngay=datetime.date(2023, 1, 1), den_ngay=datetime.date(2023, 1, 31),
+            so_lan="0", ngay_lap=datetime.date(2023, 2, 15),
+            indicators={"ct22": 0, "ct24": 1_000_000, "ct25": 1_000_000, "ct34": 100_000_000, "ct43": 0},
+        )
+        d_tndn = TaxDeclaration(
+            file_path="tndn_2023.xml", file_name="tndn_2023.xml",
+            mst="0100000055", ten_nnt="CTY SELECT TEST",
+            ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN",
+            ky_kkhai="2023", tu_ngay=datetime.date(2023, 1, 1), den_ngay=datetime.date(2023, 12, 31),
+            so_lan="0", ngay_lap=datetime.date(2024, 3, 25),
+            indicators={"A1": 200_000_000, "E": 40_000_000},
+            appendices={"PL_03_1A": [{"ma_so": "01", "chi_tieu": "Doanh thu", "gia_tri": 1_000_000_000}]},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_x = os.path.join(tmpdir, "out_selected.xlsx")
+            # Chỉ tích chọn PhanTich_RuiRo & GDLK_30EBITDA (bỏ Tong_Hop, TH, Chenh lech, Cham nop, Bao cao, KiemSoat_GTGT)
+            export_to_excel([d_gt, d_tndn], out_x, selected_sheets={"phan_tich_rui_ro", "gdlk_ebitda"})
+            wb = openpyxl.load_workbook(out_x, data_only=False)
+            names = set(wb.sheetnames)
+            # Tờ khai gốc + Biểu từng năm (2023) PHẢI luôn có mặc định
+            self.assertIn("So Thue GTGT Cuoi", names)
+            self.assertIn("KKTNDN", names)
+            self.assertIn("BCHDKD", names)
+            self.assertIn("2023", names)
+            # 2 sheet tích chọn có mặt
+            self.assertIn("PhanTich_RuiRo", names)
+            self.assertIn("GDLK_30EBITDA", names)
+            # Các sheet bỏ tích KHÔNG xuất ra
+            self.assertNotIn("Tong_Hop", names)
+            self.assertNotIn("So Thue GTGT TH", names)
+            self.assertNotIn("Chenh lech thue GTGT - TNDN", names)
+            self.assertNotIn("Tinh_TienChamNop", names)
+            self.assertNotIn("BaoCao_BienBan", names)
+            self.assertNotIn("KiemSoat_GTGT", names)
+
 
 if __name__ == "__main__":
     unittest.main()
