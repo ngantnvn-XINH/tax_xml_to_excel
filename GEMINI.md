@@ -3,6 +3,9 @@
 Mọi chỉnh sửa mã nguồn, mẫu Excel, test và tài liệu trong dự án `tax_xml_to_excel` phải tuân thủ tuyệt đối các nguyên tắc sau:
 
 ## 1. Độ Chính Xác Dữ Liệu Tờ Khai (Zero-Error Policy)
+- **NGUYÊN TẮC BẤT DI BẤT DỊCH — COPY NGUYÊN BẢN TIÊU ĐỀ & CHỈ TIÊU TỜ KHAI GỐC:**
+  - Nhiệm vụ khi tổng hợp tờ khai là **copy nguyên bản 100% tiêu đề, thứ tự cột và mã chỉ tiêu đúng như mẫu tờ khai gốc** theo từng thông tư/thời kỳ (VD: `01/NTNN` TT103 13 cột `(1)..(13)` vs TT80 15 cột `(1a), (1b), (2)..(14)`; `01/GTGT`, `03/TNDN`, `05/QTT-TNCN` theo từng thông tư).
+  - **TUYỆT ĐỐI KHÔNG** tự ý sáng tạo, thêm bớt, gộp cột, đổi tên chỉ tiêu hay suy diễn cột khác với tờ khai gốc làm sai lệch bản chất số liệu.
 - **Năm tài chính lệch kỳ (VD: 07/YYYY–06/(YYYY+1) hoặc 04/YYYY–03/(YYYY+1)):**
   - Khi xác định năm tính thuế (`TaxDeclaration.year`) cho `03/TNDN` và `BCTC`, **bắt buộc ưu tiên thẻ `<kyKKhai>` trước `den_ngay`** để tuyệt đối không bị dịch +1 năm.
   - Tự động nhận diện khoảng kỳ tài chính của `03/TNDN`; nếu là năm tài chính lệch kỳ, bắt buộc sinh thêm sheet `'So Thue GTGT Cuoi (Lech ky)'` tổng hợp tờ khai GTGT theo đúng khung tháng tài chính của TNDN và nối tự động sang `'Chenh lech thue GTGT - TNDN'`.
