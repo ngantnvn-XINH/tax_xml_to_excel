@@ -1912,6 +1912,109 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertEqual(round(m_nt["gtgt_c2_by_ht"][2020]), 5_000_000)
         self.assertEqual(round(m_nt["tndn_c2_by_ht"][2020]), 8_000_000)
 
+    def test_v16_ntnn_tt80_15_column_verbatim_layout(self) -> None:
+        """Kiểm thử v1.6: Đọc chính xác 100% mẫu 01/NTNN theo TT80/2021 (15 cột: (1a), (1b), (2)..(14)) và xuất nguyên bản không lệch cột."""
+        from excel_exporter import export_to_excel
+        from tax_parser import parse_tax_xml
+
+        # Dữ liệu giả lập ẩn danh 100% theo đúng cấu trúc TT80/2021 (maTKhai=884, 15 cột (1a)..(14))
+        xml_tt80 = """<?xml version="1.0" encoding="UTF-8"?>
+<HSoThueDTu xmlns="http://kekhaithue.gdt.gov.vn/TKhaiThue" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <HSoKhaiThue>
+    <TTinChung>
+      <TTinTKhaiThue>
+        <TKhaiThue>
+          <maTKhai>884</maTKhai>
+          <tenTKhai>Tờ khai thuế nhà thầu nước ngoài (01/NTNN)</tenTKhai>
+          <moTaBMau>Ban hành kèm theo Thông tư số 80/2021/TT-BTC</moTaBMau>
+          <loaiTKhai>C</loaiTKhai>
+          <soLan>0</soLan>
+          <KyKKhaiThue>
+            <kieuKy>D</kieuKy>
+            <kyKKhai>07/01/2022</kyKKhai>
+            <kyKKhaiTuNgay>07/01/2022</kyKKhaiTuNgay>
+            <kyKKhaiDenNgay>07/01/2022</kyKKhaiDenNgay>
+          </KyKKhaiThue>
+          <ngayLapTKhai>2022-01-14</ngayLapTKhai>
+        </TKhaiThue>
+        <NNT>
+          <mst>0100000099</mst>
+          <tenNNT>CONG TY MAU TT80</tenNNT>
+        </NNT>
+      </TTinTKhaiThue>
+    </TTinChung>
+    <CTieuTKhaiChinh>
+      <BKThueNTNN>
+        <ThueNTNN id="ID_1">
+          <ct1a>GLOBAL TECH TEST PTE. LTD</ct1a>
+          <ct1b>Thu nhập bản quyền</ct1b>
+          <ct2 xsi:nil="true"/>
+          <ct3>HD-2021-999</ct3>
+          <ct4>2021-11-23</ct4>
+          <ct5>80000000</ct5>
+          <ct6>2022-01-07</ct6>
+          <ThueGTGT>
+            <ct7>80000000</ct7>
+            <ct8>0</ct8>
+            <ct9>0</ct9>
+          </ThueGTGT>
+          <ThueTNDN>
+            <ct10>80000000</ct10>
+            <ct11>10</ct11>
+            <ct12>0</ct12>
+            <ct13>8000000</ct13>
+          </ThueTNDN>
+          <ct14>8000000</ct14>
+        </ThueNTNN>
+      </BKThueNTNN>
+      <tong_ct5>80000000</tong_ct5>
+      <tong_ct7>80000000</tong_ct7>
+      <tong_ct9>0</tong_ct9>
+      <tong_ct10>80000000</tong_ct10>
+      <tong_ct12>0</tong_ct12>
+      <tong_ct13>8000000</tong_ct13>
+      <tong_ct14>8000000</tong_ct14>
+    </CTieuTKhaiChinh>
+  </HSoKhaiThue>
+</HSoThueDTu>
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = os.path.join(tmpdir, "ntnn_tt80_sample.xml")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(xml_tt80)
+            d = parse_tax_xml(p)
+            self.assertEqual(d.tax_type, "NTNN")
+            self.assertEqual(d.indicators["_ntnn_dt_chua_gtgt"], 80_000_000)
+            self.assertEqual(d.indicators["_ntnn_dt_gtgt"], 80_000_000)
+            self.assertEqual(d.indicators["_ntnn_thue_gtgt"], 0)
+            self.assertEqual(d.indicators["_ntnn_dt_tndn"], 80_000_000)
+            self.assertEqual(d.indicators["_ntnn_thue_tndn"], 8_000_000)
+            self.assertEqual(d.indicators["_ntnn_tong_thue"], 8_000_000)
+
+            out_x = os.path.join(tmpdir, "out_tt80.xlsx")
+            export_to_excel([d], out_x)
+            wb = openpyxl.load_workbook(out_x, data_only=False)
+            ws_th = wb["So Thue NTNN TH"]
+            # Phải tự nhận diện và xuất đủ 15 cột nguyên bản TT80 (cột 9..23) + Trạng thái (cột 24)
+            self.assertEqual(ws_th.max_column, 24)
+            self.assertEqual(ws_th.cell(1, 9).value, "Tên nhà thầu (1a)")
+            self.assertEqual(ws_th.cell(1, 10).value, "Tên ngành nghề (1b)")
+            self.assertEqual(ws_th.cell(2, 9).value, "GLOBAL TECH TEST PTE. LTD")  # (1a)
+            self.assertEqual(ws_th.cell(2, 10).value, "Thu nhập bản quyền")        # (1b)
+            self.assertEqual(ws_th.cell(2, 11).value or "", "")                     # (2) MST trống (KHÔNG lấy nhầm số HĐ!)
+            self.assertEqual(ws_th.cell(2, 12).value, "HD-2021-999")                # (3) Số HĐ
+            self.assertEqual(ws_th.cell(2, 13).value, "2021-11-23")                 # (4) Ngày HĐ
+            self.assertEqual(ws_th.cell(2, 14).value, 80_000_000)                   # (5) DT chưa gồm GTGT
+            self.assertEqual(ws_th.cell(2, 15).value, "2022-01-07")                 # (6) Ngày thanh toán
+            self.assertEqual(ws_th.cell(2, 16).value, 80_000_000)                   # (7) DT GTGT
+            self.assertEqual(ws_th.cell(2, 17).value, 0)                            # (8) Tỷ lệ GTGT
+            self.assertEqual(ws_th.cell(2, 18).value, 0)                            # (9) Thuế GTGT
+            self.assertEqual(ws_th.cell(2, 19).value, 80_000_000)                   # (10) DT TNDN
+            self.assertEqual(ws_th.cell(2, 20).value, 10)                           # (11) Tỷ lệ TNDN
+            self.assertEqual(ws_th.cell(2, 21).value, 0)                            # (12) Miễn giảm
+            self.assertEqual(ws_th.cell(2, 22).value, 8_000_000)                    # (13) Thuế TNDN
+            self.assertEqual(ws_th.cell(2, 23).value, 8_000_000)                    # (14) Tổng thuế NSNN
+
 
 if __name__ == "__main__":
     unittest.main()

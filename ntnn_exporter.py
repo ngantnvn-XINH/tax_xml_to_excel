@@ -59,7 +59,7 @@ def _looks_like_date(text: Optional[str]) -> bool:
     if not text:
         return False
     s = text.strip()
-    return bool(re.match(r"^(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{2}-\d{2}-\d{4})$", s))
+    return bool(re.match(r"^(\d{4}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})$", s))
 
 
 def _get_main_declaration_root(root: ET.Element) -> ET.Element:
@@ -88,39 +88,74 @@ def detect_ntnn_schema(
     year: Optional[int] = None,
 ) -> str:
     """
-    Nhận diện chuẩn thẻ XML của tờ khai 01/NTNN:
-    - 'TCT_NESTED' (Chuẩn XML chính thức của TCT / HTKK / TaxOnline: <BKThueNTNN>/<ThueNTNN>
-      gồm ct1..ct5, <ThueGTGT> ct6=DT GTGT, ct7=Tỷ lệ, ct8=nil, ct9=Thuế GTGT,
-      <ThueTNDN> ct10=DT TNDN, ct11=Tỷ lệ, ct12=Miễn giảm, ct13=Thuế TNDN, và ct14=Tổng thuế;
-      tổng cộng: tong_ct6, tong_ct9, tong_ct10, tong_ct12, tong_ct13, tong_ct14).
-    - 'M14_SHIFTED' (Chỉ khi ct6 là ngày thanh toán -> ct7=DT GTGT, ct9=Thuế GTGT, ct10=DT TNDN, ct13=Thuế TNDN, ct14=Tổng thuế).
-    - 'M13_FLAT' (XML phẳng chỉ có ct1..ct13 không có ct14 và không có <ThueGTGT>/<ThueTNDN>).
+    Nhận diện chính xác chuẩn mẫu tờ khai 01/NTNN:
+    - 'M14_SHIFTED' (Mẫu TT80/2021/TT-BTC — 15 cột: (1a) Tên nhà thầu, (1b) Tên ngành nghề, (2) MST NTNN,
+      (3) Số HĐ, (4) Ngày HĐ, (5) DT chưa gồm GTGT, (6) Ngày thanh toán, (7) DT GTGT, (8) Tỷ lệ GTGT,
+      (9) Thuế GTGT, (10) DT TNDN, (11) Tỷ lệ TNDN, (12) Miễn giảm, (13) Thuế TNDN, (14) Tổng thuế NSNN).
+    - 'TCT_NESTED' (Mẫu TT103/2014/TT-BTC chuẩn XML lồng TCT/HTKK: <BKThueNTNN>/<ThueNTNN> gồm ct1..ct5,
+      <ThueGTGT> ct6=DT GTGT, ct7=Tỷ lệ, ct8=nil, ct9=Thuế GTGT,
+      <ThueTNDN> ct10=DT TNDN, ct11=Tỷ lệ, ct12=Miễn giảm, ct13=Thuế TNDN, ct14=Tổng thuế).
+    - 'M13_FLAT' (Mẫu TT103 phẳng chỉ có ct1..ct13 không có ct14 và không có <ThueGTGT>/<ThueTNDN>).
     """
     scan_root = _get_main_declaration_root(root)
     all_tags: Set[str] = set()
+    ct4_is_date = False
+    ct5_is_date = False
     ct6_is_date = False
 
     for el in _iter_non_khbs(scan_root):
         t = _strip_ns(el.tag).lower()
         all_tags.add(t)
-        if len(el) == 0 and t in ("ct6", "ct06", "ct_6") and el.text and _looks_like_date(el.text):
-            ct6_is_date = True
+        if len(el) == 0 and el.text:
+            if t in ("ct4", "ct04", "ct_4") and _looks_like_date(el.text):
+                ct4_is_date = True
+            elif t in ("ct5", "ct05", "ct_5") and _looks_like_date(el.text):
+                ct5_is_date = True
+            elif t in ("ct6", "ct06", "ct_6") and _looks_like_date(el.text):
+                ct6_is_date = True
 
-    if ct6_is_date:
+    tt80_tags = (
+        "ct1a", "ct_1a", "ct01a", "ct1b", "ct_1b", "ct01b",
+        "tennganhnghe", "nganhnghe", "nganhnghekd", "ten_nganh_nghe",
+        "ngayhopdong", "ngayhd", "ngay_hd", "ngaykyhd",
+        "tong_ct5", "tongct5", "tong_ct7", "tongct7",
+    )
+    meta_txt = f"{mo_ta_bmau or ''} {ten_tkhai or ''}".lower()
+    ma_clean = (ma_tkhai or "").strip()
+    has_nested_or_14 = any(t in all_tags for t in ("thuentnn", "bkthuentnn", "thuegtgt", "thuetndn", "ct14", "ct_14", "tong_ct14"))
+
+    # Ưu tiên cấu trúc thẻ thực tế trong XML trước metadata:
+    if ct4_is_date or ct6_is_date or any(t in all_tags for t in tt80_tags):
         return "M14_SHIFTED"
-    if any(t in all_tags for t in ("thuentnn", "bkthuentnn", "thuegtgt", "thuetndn", "ct14", "ct_14", "tong_ct14")):
+    if ct5_is_date:
+        return "TCT_NESTED" if has_nested_or_14 else "M13_FLAT"
+    if "80/2021" in meta_txt or ma_clean in ("884", "844", "908"):
+        return "M14_SHIFTED"
+    if has_nested_or_14:
         return "TCT_NESTED"
     return "M13_FLAT"
 
 
 def _flatten_row_leaves(row_el: ET.Element) -> Dict[str, str]:
-    """Làm phẳng toàn bộ thẻ lá con cháu trong 1 dòng <ThueNTNN> (kể cả lồng trong <ThueGTGT>, <ThueTNDN>)."""
+    """Làm phẳng toàn bộ thẻ lá con cháu trong 1 dòng <ThueNTNN>, đồng thời lưu khóa 'parent.child' để tránh đè thẻ trùng tên giữa <ThueGTGT>/<ThueTNDN>/<HopDong>."""
     cmap: Dict[str, str] = {}
-    for el in row_el.iter():
-        if len(el) == 0 and el.text and el.text.strip():
-            t = _strip_ns(el.tag).lower()
-            if t not in cmap:
-                cmap[t] = el.text.strip()
+
+    def _walk(node: ET.Element, parent_tag: str = "") -> None:
+        t = _strip_ns(node.tag).lower()
+        if len(node) == 0:
+            if node.text and node.text.strip():
+                val = node.text.strip()
+                if t not in cmap:
+                    cmap[t] = val
+                if parent_tag:
+                    pk = f"{parent_tag}.{t}"
+                    if pk not in cmap:
+                        cmap[pk] = val
+        else:
+            for ch in node:
+                _walk(ch, t)
+
+    _walk(row_el)
     return cmap
 
 
@@ -190,23 +225,29 @@ def extract_ntnn_contract_rows_from_xml_root(
             continue
 
         is_sem = any(k in cmap for k in sem_fin_keys)
+        ten_nganh_nghe = ""
+        ngay_hd = ""
         if is_sem:
-            noi_dung = _pick_str(cmap, ("noidung", "tennhathau", "tenhhdv", "ct1", "ct01", "ct1a", "ct1b"))
-            mst_nt = _pick_str(cmap, ("mstnhathau", "mstntnn", "mst_ntnn", "ct2", "ct02"))
-            hop_dong = _pick_str(cmap, ("sohopdong", "sohd", "so_hd", "hopdong", "ct3", "ct03"))
-            dt_chua = _pick_num(cmap, ("doanhthuchuagomgtgt", "dthuchuagtgt", "dthuchuabaogomthuegtgt", "ct4", "ct04"))
-            ngay_tt = _pick_str(cmap, ("ngaythanhtoan", "ngaytt", "ngay_tt", "ct5", "ct05"))
-            dt_g = _pick_num(cmap, ("dthutinhthuegtgt", "doanhthutinhthuegtgt", "doanhthugtgt"))
-            tl_g = _pick_num(cmap, ("tylegtgt", "tyletinhthuegtgt", "thuesuatgtgt"))
-            th_g = _pick_num(cmap, ("thuegtgtpnop", "thuegtgtphainop", "sothuegtgt", "thuegtgt"))
-            dt_t = _pick_num(cmap, ("dthutinhthuetndn", "doanhthutinhthuetndn", "doanhthutndn"))
-            tl_t = _pick_num(cmap, ("tyletndn", "tyletinhthuetndn", "thuesuattndn"))
-            mg_t = _pick_num(cmap, ("thuemiengiam", "sothuemiengiam", "miengiam"))
-            th_t = _pick_num(cmap, ("thuetndnpnop", "thuetndnphainop", "sothuetndn", "thuetndn"))
-            tot = _pick_num(cmap, ("tongthuepnop", "tongthuephainop", "tongsothuepnop"))
-            row_schema = "Semantic"
+            noi_dung = _pick_str(cmap, ("tennhathau", "tenntnn", "ten_ntnn", "tennhathaunuocngoai", "noidung", "tenhhdv", "ct1a", "ct_1a", "ct01a", "ct1", "ct01"))
+            ten_nganh_nghe = _pick_str(cmap, ("tennganhnghe", "nganhnghe", "nganhnghekd", "ten_nganh_nghe", "ct1b", "ct_1b", "ct01b"))
+            mst_nt = _pick_str(cmap, ("mstnhathau", "mstntnn", "mst_ntnn", "masothue", "ct2", "ct02"))
+            hop_dong = _pick_str(cmap, ("sohopdong", "sohd", "so_hd", "hopdong.so", "hopdong", "ct3", "ct03"))
+            ngay_hd = _pick_str(cmap, ("ngayhopdong", "ngayhd", "ngay_hd", "ngaykyhd", "hopdong.ngay", "ct4", "ct04"))
+            if ngay_hd and not _looks_like_date(ngay_hd) and schema != "M14_SHIFTED":
+                ngay_hd = ""
+            dt_chua = _pick_num(cmap, ("doanhthuchuagomgtgt", "dthuchuagtgt", "dthuchuabaogomthuegtgt", "doanhthuchuabaogomthuegtgt", "dthu_chua_gtgt", "ct5" if schema == "M14_SHIFTED" else "ct4", "ct05" if schema == "M14_SHIFTED" else "ct04"))
+            ngay_tt = _pick_str(cmap, ("ngaythanhtoan", "ngaytt", "ngay_tt", "ct6" if schema == "M14_SHIFTED" else "ct5", "ct06" if schema == "M14_SHIFTED" else "ct05"))
+            dt_g = _pick_num(cmap, ("dthutinhthuegtgt", "doanhthutinhthuegtgt", "doanhthugtgt", "thuegtgt.doanhthutinhthue", "thuegtgt.dthutinhthue"))
+            tl_g = _pick_num(cmap, ("tylegtgt", "tyletinhthuegtgt", "thuesuatgtgt", "thuegtgt.tyle"))
+            th_g = _pick_num(cmap, ("thuegtgtpnop", "thuegtgtphainop", "sothuegtgt", "thuegtgt", "thuegtgt.sothuepnop"))
+            dt_t = _pick_num(cmap, ("dthutinhthuetndn", "doanhthutinhthuetndn", "doanhthutndn", "thuetndn.doanhthutinhthue", "thuetndn.dthutinhthue"))
+            tl_t = _pick_num(cmap, ("tyletndn", "tyletinhthuetndn", "thuesuattndn", "thuetndn.tyle"))
+            mg_t = _pick_num(cmap, ("thuemiengiam", "sothuemiengiam", "sothueduocmiengiam", "miengiam", "thuetndn.miengiam"))
+            th_t = _pick_num(cmap, ("thuetndnpnop", "thuetndnphainop", "sothuetndn", "thuetndn", "thuetndn.sothuepnop"))
+            tot = _pick_num(cmap, ("tongthuepnop", "tongthuephainop", "tongsothuepnop", "tongthue"))
+            row_schema = "M14_SHIFTED" if (schema == "M14_SHIFTED" or ten_nganh_nghe or ngay_hd) else "Semantic"
         elif schema == "TCT_NESTED":
-            # Chuẩn XML chính thức TCT/HTKK/TaxOnline:
+            # Chuẩn XML chính thức TT103/2014 (13 cột):
             # ct1=Nội dung, ct2=MST, ct3=Hợp đồng, ct4=DT chưa gồm GTGT, ct5=Ngày thanh toán,
             # ThueGTGT: ct6=DT GTGT, ct7=Tỷ lệ GTGT, ct8=nil, ct9=Thuế GTGT,
             # ThueTNDN: ct10=DT TNDN, ct11=Tỷ lệ TNDN, ct12=Miễn giảm, ct13=Thuế TNDN, ct14=Tổng thuế
@@ -225,21 +266,22 @@ def extract_ntnn_contract_rows_from_xml_root(
             tot = _pick_num(cmap, ("ct14", "ct_14"))
             row_schema = "TCT_NESTED"
         elif schema == "M14_SHIFTED":
-            noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct2", "ct02", "noidung"))
-            mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "ct3", "ct03", "mstnhathau"))
-            so_hd = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong"))
-            ngay_hd = _pick_str(cmap, ("ct4", "ct04", "ct_4", "ngayhopdong"))
-            hop_dong = f"{so_hd} ({ngay_hd})" if (so_hd and ngay_hd) else (so_hd or ngay_hd)
-            dt_chua = _pick_num(cmap, ("ct5", "ct05", "ct_5"))
-            ngay_tt = _pick_str(cmap, ("ct6", "ct06", "ct_6", "ngaythanhtoan"))
-            dt_g = _pick_num(cmap, ("ct7", "ct07", "ct_7"))
-            tl_g = _pick_num(cmap, ("ct8", "ct08", "ct_8"))
-            th_g = _pick_num(cmap, ("ct9", "ct09", "ct_9"))
-            dt_t = _pick_num(cmap, ("ct10", "ct_10"))
-            tl_t = _pick_num(cmap, ("ct11", "ct_11"))
-            mg_t = _pick_num(cmap, ("ct12", "ct_12"))
-            th_t = _pick_num(cmap, ("ct13", "ct_13"))
-            tot = _pick_num(cmap, ("ct14", "ct_14"))
+            # Chuẩn mẫu TT80/2021 (15 cột: (1a), (1b), (2)..(14)) — tuyệt đối không rơi nhầm sang cột kế bên!
+            noi_dung = _pick_str(cmap, ("ct1a", "ct_1a", "ct01a", "tennhathau", "tenntnn", "ct1", "ct01", "ct_1", "noidung"))
+            ten_nganh_nghe = _pick_str(cmap, ("ct1b", "ct_1b", "ct01b", "tennganhnghe", "nganhnghe", "nganhnghekd"))
+            mst_nt = _pick_str(cmap, ("ct2", "ct02", "ct_2", "mstnhathau", "mstntnn", "mst_ntnn"))
+            hop_dong = _pick_str(cmap, ("ct3", "ct03", "ct_3", "sohopdong", "sohd", "so_hd", "hopdong.so"))
+            ngay_hd = _pick_str(cmap, ("ct4", "ct04", "ct_4", "ngayhopdong", "ngayhd", "ngay_hd", "hopdong.ngay"))
+            dt_chua = _pick_num(cmap, ("ct5", "ct05", "ct_5", "doanhthuchuagomgtgt", "dthuchuagtgt"))
+            ngay_tt = _pick_str(cmap, ("ct6", "ct06", "ct_6", "ngaythanhtoan", "ngaytt"))
+            dt_g = _pick_num(cmap, ("ct7", "ct07", "ct_7", "dthutinhthuegtgt"))
+            tl_g = _pick_num(cmap, ("ct8", "ct08", "ct_8", "tylegtgt"))
+            th_g = _pick_num(cmap, ("ct9", "ct09", "ct_9", "thuegtgtpnop"))
+            dt_t = _pick_num(cmap, ("ct10", "ct_10", "dthutinhthuetndn"))
+            tl_t = _pick_num(cmap, ("ct11", "ct_11", "tyletndn"))
+            mg_t = _pick_num(cmap, ("ct12", "ct_12", "thuemiengiam"))
+            th_t = _pick_num(cmap, ("ct13", "ct_13", "thuetndnpnop"))
+            tot = _pick_num(cmap, ("ct14", "ct_14", "tongthuepnop"))
             row_schema = "M14_SHIFTED"
         else:  # M13_FLAT
             noi_dung = _pick_str(cmap, ("ct1", "ct01", "ct_1", "ct1a", "ct1b", "noidung"))
@@ -263,8 +305,10 @@ def extract_ntnn_contract_rows_from_xml_root(
             tot = th_g + th_t
         rows.append({
             "noi_dung": noi_dung,
+            "ten_nganh_nghe": ten_nganh_nghe,
             "mst_nt": mst_nt,
             "hop_dong": hop_dong,
+            "ngay_hd": ngay_hd,
             "dt_chua_gtgt": dt_chua,
             "ngay_tt": ngay_tt,
             "dt_gtgt": dt_g,
@@ -317,12 +361,12 @@ def extract_ntnn_totals_from_xml_root(
         tot_th_t = {"tong_ct13", "ct13_tong", "tongthuetndn", "tongthuetndnpnop"}
         tot_all = {"tong_ct14", "ct14_tong", "tongthuepnop", "tongthuephainop", "tongcong"}
     elif schema == "M14_SHIFTED":
-        tot_dt_chua = {"tong_ct5", "tong_ct05", "ct5_tong", "tongdoanhthuchuagomgtgt"}
-        tot_dt_g = {"tong_ct7", "tong_ct07", "ct7_tong", "tongdoanhthugtgt", "tongdthutinhthuegtgt"}
-        tot_th_g = {"tong_ct9", "tong_ct09", "ct9_tong", "tongthuegtgt", "tongthuegtgtpnop"}
-        tot_dt_t = {"tong_ct10", "ct10_tong", "tongdoanhthutndn", "tongdthutinhthuetndn"}
-        tot_th_t = {"tong_ct13", "ct13_tong", "tongthuetndn", "tongthuetndnpnop"}
-        tot_all = {"tong_ct14", "ct14_tong", "tongthuepnop", "tongthuephainop", "tongcong"}
+        tot_dt_chua = {"tong_ct5", "tongct5", "tong_ct05", "ct5_tong", "tongdoanhthuchuagomgtgt", "tongdthuchuagtgt", "tongdthuchuabaogomthuegtgt"}
+        tot_dt_g = {"tong_ct7", "tongct7", "tong_ct07", "ct7_tong", "tongdoanhthugtgt", "tongdthutinhthuegtgt"}
+        tot_th_g = {"tong_ct9", "tongct9", "tong_ct09", "ct9_tong", "tongthuegtgt", "tongthuegtgtpnop"}
+        tot_dt_t = {"tong_ct10", "tongct10", "ct10_tong", "tongdoanhthutndn", "tongdthutinhthuetndn"}
+        tot_th_t = {"tong_ct13", "tongct13", "ct13_tong", "tongthuetndn", "tongthuetndnpnop"}
+        tot_all = {"tong_ct14", "tongct14", "ct14_tong", "tongthuepnop", "tongthuephainop", "tongcong"}
     else:  # M13_FLAT
         tot_dt_chua = {"tong_ct4", "tong_ct04", "ct4_tong", "tongdoanhthuchuagomgtgt"}
         tot_dt_g = {"tong_ct6", "tong_ct06", "ct6_tong", "tongdoanhthugtgt", "tongdthutinhthuegtgt"}
@@ -652,7 +696,7 @@ def _write_ntnn_row(ws: openpyxl.worksheet.worksheet.Worksheet, r: int, stt: int
             c.alignment = al_l
 
 
-# Tiêu đề NGUYÊN BẢN 100% đúng mẫu 01/NTNN 13 cột (1)..(13) theo ảnh mẫu người dùng cung cấp!
+# Tiêu đề NGUYÊN BẢN 100% đúng mẫu 01/NTNN TT103/2014 (13 cột: (1)..(13))
 NTNN_DETAIL_HEADERS_M13 = [
     "STT",
     "Tên file XML",
@@ -675,6 +719,34 @@ NTNN_DETAIL_HEADERS_M13 = [
     "Số thuế được miễn giảm\ntheo Hiệp định (11)",
     "Thuế TNDN phải nộp\n(12)=(9)x(10)-(11)",
     "Tổng số thuế phải nộp\nvào NSNN (13)=(8)+(12)",
+    "Trạng thái / Báo trùng",
+]
+
+# Tiêu đề NGUYÊN BẢN 100% đúng mẫu 01/NTNN TT80/2021 (15 cột: (1a), (1b), (2)..(14))
+NTNN_DETAIL_HEADERS_TT80 = [
+    "STT",
+    "Tên file XML",
+    "MST nộp thay",
+    "Kỳ kê khai",
+    "Loại TK",
+    "Lần BS",
+    "Ngày lập",
+    "Kiểu kỳ",
+    "Tên nhà thầu (1a)",
+    "Tên ngành nghề (1b)",
+    "Mã số thuế của NTNN\ntại Việt Nam (nếu có) (2)",
+    "Hợp đồng - Số (3)",
+    "Hợp đồng -\nNgày/tháng/Năm (4)",
+    "Doanh thu chưa bao gồm\nthuế GTGT (5)",
+    "Ngày thanh toán (6)",
+    "Doanh thu tính thuế\nGTGT (7)",
+    "Tỷ lệ giá trị gia tăng\n(%) (8)",
+    "Thuế GTGT phải nộp\n(9)=(7)x(8)",
+    "Doanh thu tính thuế\nTNDN (10)",
+    "Tỷ lệ thuế TNDN\n(%) (11)",
+    "Số thuế được miễn giảm\ntheo Hiệp định (12)",
+    "Thuế TNDN phải nộp\n[13=(10x11)-(12)]",
+    "Tổng số thuế phải nộp\nvào NSNN (14)=(9)+(13)",
     "Trạng thái / Báo trùng",
 ]
 
@@ -736,7 +808,18 @@ def write_ntnn_timeline_sheet(
     existing_sheets.add(sheet_name)
     ws = wb.create_sheet(title=sheet_name)
 
-    headers = NTNN_DETAIL_HEADERS_M13
+    dup_notes = find_ntnn_duplicates(declarations)
+    sorted_decls = sorted(declarations, key=_sort_key_ntnn)
+    preloaded_rows: List[Tuple[TaxDeclaration, List[Dict[str, Any]]]] = [
+        (d, get_ntnn_contract_rows(d)) for d in sorted_decls
+    ]
+    use_tt80_layout = any(
+        cr.get("schema") == "M14_SHIFTED" or bool(cr.get("ten_nganh_nghe")) or bool(cr.get("ngay_hd"))
+        for _, crows in preloaded_rows
+        for cr in crows
+    )
+
+    headers = NTNN_DETAIL_HEADERS_TT80 if use_tt80_layout else NTNN_DETAIL_HEADERS_M13
     total_cols = len(headers)
 
     f_hdr = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
@@ -752,7 +835,7 @@ def write_ntnn_timeline_sheet(
     al_l = Alignment(horizontal="left", vertical="center", wrap_text=True)
     al_r = Alignment(horizontal="right", vertical="center")
 
-    ws.row_dimensions[1].height = 32
+    ws.row_dimensions[1].height = 34
     for ci, h in enumerate(headers, start=1):
         c = ws.cell(1, ci, h)
         c.font = f_hdr
@@ -760,22 +843,31 @@ def write_ntnn_timeline_sheet(
         c.alignment = al_c
         c.border = b_thin
 
-    widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 14, 24, 19, 13, 18, 11, 17, 18, 11, 16, 17, 18, 36]
-    sum_cols = (12, 14, 16, 17, 19, 20, 21)
-    rate_cols = (15, 18)
-    tot_tax_col = 21
-    status_col = 22
+    if use_tt80_layout:
+        widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 22, 15, 16, 13, 19, 13, 18, 11, 17, 18, 11, 16, 17, 18, 36]
+        sum_cols = (14, 16, 18, 19, 21, 22, 23)
+        rate_cols = (17, 20)
+        text_id_cols = (3, 11, 12)
+        center_cols = (1, 4, 5, 6, 8, 13, 15)
+        tot_tax_col = 23
+        status_col = 24
+    else:
+        widths = [6, 26, 14, 12, 11, 7, 12, 10, 32, 14, 24, 19, 13, 18, 11, 17, 18, 11, 16, 17, 18, 36]
+        sum_cols = (12, 14, 16, 17, 19, 20, 21)
+        rate_cols = (15, 18)
+        text_id_cols = (3, 10, 11)
+        center_cols = (1, 4, 5, 6, 8, 13)
+        tot_tax_col = 21
+        status_col = 22
 
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.freeze_panes = "E2"
 
-    dup_notes = find_ntnn_duplicates(declarations)
-    sorted_decls = sorted(declarations, key=_sort_key_ntnn)
     cur_r = 2
     stt = 0
     dup_in_sheet = 0
-    for d in sorted_decls:
+    for d, contract_rows in preloaded_rows:
         lan_int = int(d.so_lan) if str(d.so_lan or "").isdigit() else 0
         loai_txt = "Bổ sung" if lan_int > 0 else "Chính thức"
         ky_mode_txt = "Lần PS" if is_ntnn_per_occurrence(d) else "Tháng/Kỳ"
@@ -784,33 +876,60 @@ def write_ntnn_timeline_sheet(
         is_dup = bool(dup_msg)
         if is_dup:
             dup_in_sheet += 1
-        contract_rows = get_ntnn_contract_rows(d)
         for cr in contract_rows:
             stt += 1
-            vals = [
-                stt,
-                d.file_name,
-                d.mst,
-                d.ky_kkhai,
-                loai_txt,
-                lan_int,
-                d.ngay_lap,
-                ky_mode_txt,
-                cr.get("noi_dung", ""),
-                cr.get("mst_nt", ""),
-                cr.get("hop_dong", ""),
-                round(float(cr.get("dt_chua_gtgt", 0.0))),
-                cr.get("ngay_tt", ""),
-                round(float(cr.get("dt_gtgt", 0.0))),
-                float(cr.get("ty_le_gtgt", 0.0)),
-                round(float(cr.get("thue_gtgt", 0.0))),
-                round(float(cr.get("dt_tndn", 0.0))),
-                float(cr.get("ty_le_tndn", 0.0)),
-                round(float(cr.get("mien_giam", 0.0))),
-                round(float(cr.get("thue_tndn", 0.0))),
-                round(float(cr.get("tong_thue", 0.0))),
-                status_txt,
-            ]
+            if use_tt80_layout:
+                vals = [
+                    stt,
+                    d.file_name,
+                    d.mst,
+                    d.ky_kkhai,
+                    loai_txt,
+                    lan_int,
+                    d.ngay_lap,
+                    ky_mode_txt,
+                    cr.get("noi_dung", ""),
+                    cr.get("ten_nganh_nghe", ""),
+                    cr.get("mst_nt", ""),
+                    cr.get("hop_dong", ""),
+                    cr.get("ngay_hd", ""),
+                    round(float(cr.get("dt_chua_gtgt", 0.0))),
+                    cr.get("ngay_tt", ""),
+                    round(float(cr.get("dt_gtgt", 0.0))),
+                    float(cr.get("ty_le_gtgt", 0.0)),
+                    round(float(cr.get("thue_gtgt", 0.0))),
+                    round(float(cr.get("dt_tndn", 0.0))),
+                    float(cr.get("ty_le_tndn", 0.0)),
+                    round(float(cr.get("mien_giam", 0.0))),
+                    round(float(cr.get("thue_tndn", 0.0))),
+                    round(float(cr.get("tong_thue", 0.0))),
+                    status_txt,
+                ]
+            else:
+                vals = [
+                    stt,
+                    d.file_name,
+                    d.mst,
+                    d.ky_kkhai,
+                    loai_txt,
+                    lan_int,
+                    d.ngay_lap,
+                    ky_mode_txt,
+                    cr.get("noi_dung", ""),
+                    cr.get("mst_nt", ""),
+                    cr.get("hop_dong", ""),
+                    round(float(cr.get("dt_chua_gtgt", 0.0))),
+                    cr.get("ngay_tt", ""),
+                    round(float(cr.get("dt_gtgt", 0.0))),
+                    float(cr.get("ty_le_gtgt", 0.0)),
+                    round(float(cr.get("thue_gtgt", 0.0))),
+                    round(float(cr.get("dt_tndn", 0.0))),
+                    float(cr.get("ty_le_tndn", 0.0)),
+                    round(float(cr.get("mien_giam", 0.0))),
+                    round(float(cr.get("thue_tndn", 0.0))),
+                    round(float(cr.get("tong_thue", 0.0))),
+                    status_txt,
+                ]
             for ci, v in enumerate(vals, start=1):
                 c = ws.cell(cur_r, ci, v)
                 if is_dup:
@@ -819,13 +938,13 @@ def write_ntnn_timeline_sheet(
                 else:
                     c.font = f_bold if ci == tot_tax_col else f_reg
                 c.border = b_thin
-                if ci in (3, 10, 11):
+                if ci in text_id_cols:
                     c.number_format = "@"
                     c.alignment = al_l
                 elif ci == 7:
                     c.number_format = "dd/mm/yyyy"
                     c.alignment = al_c
-                elif ci in (1, 4, 5, 6, 8, 13):
+                elif ci in center_cols:
                     c.alignment = al_c
                 elif ci in rate_cols:
                     c.number_format = "0.##"
