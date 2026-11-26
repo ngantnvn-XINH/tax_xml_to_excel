@@ -2150,8 +2150,11 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertEqual(extract_ky_fiscal_year("2403L1", datetime.datetime(2024, 4, 15), 4), 2023)
         self.assertEqual(extract_ky_fiscal_year("PS 03/2024", datetime.datetime(2024, 4, 15), 4), 2023)
 
-        # 3. Kiểm tra detect_tndn_fiscal_ranges chống lỗi gõ nhầm Đến ngày 30/06/2024 (15 tháng) cho NTC 04/2023-03/2024
+        # 3. Kiểm tra detect_tndn_fiscal_ranges cho cả 2 tình huống:
+        #    (a) Có năm sau (2024) chồng lấn -> tự cắt năm 2023 về 31/03/2024
+        #    (b) Doanh nghiệp giải thể (không có 2024), gộp <= 15 tháng (04/2023-06/2024) -> GIỮ NGUYÊN (01/04/2023, 30/06/2024)
         from excel_exporter import detect_tndn_fiscal_ranges
+        from qhns_summarizer import compute_tq_metrics, detect_fiscal_ranges_from_workbook
         from tax_parser import TaxDeclaration
         d22 = TaxDeclaration(file_path="t22.xml", file_name="t22.xml", mst="0100000011", ten_nnt="CTY X", ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN", ky_kkhai="2022", tu_ngay=datetime.date(2022, 4, 1), den_ngay=datetime.date(2023, 3, 31))
         d23 = TaxDeclaration(file_path="t23.xml", file_name="t23.xml", mst="0100000011", ten_nnt="CTY X", ma_tkhai="03/TNDN", ten_tkhai="03/TNDN", tax_type="TNDN", ky_kkhai="2023", tu_ngay=datetime.date(2023, 4, 1), den_ngay=datetime.date(2024, 6, 30))
@@ -2159,9 +2162,27 @@ class TestTaxXmlToExcel(unittest.TestCase):
         fr = detect_tndn_fiscal_ranges([d22, d23, d24])
         self.assertEqual(fr[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 3, 31)))
         self.assertEqual(fr[2024], (datetime.date(2024, 4, 1), datetime.date(2025, 3, 31)))
-        # Ngay cả khi chưa có tờ khai 2024, 04/2023-06/2024 vẫn tự chuẩn hóa về 04/2023-03/2024!
-        fr_no24 = detect_tndn_fiscal_ranges([d22, d23])
-        self.assertEqual(fr_no24[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 3, 31)))
+        # Giải thể gộp 15 tháng (không có tờ khai 2024): giữ nguyên 01/04/2023 -> 30/06/2024!
+        fr_dissolve = detect_tndn_fiscal_ranges([d22, d23])
+        self.assertEqual(fr_dissolve[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 6, 30)))
+
+        # 4. Kiểm tra đồng nhất phát sinh (TK) & số nộp (C2) trong năm giải thể 15 tháng (04/2023-06/2024) trên TQ & TQ_NTNN
+        ws.cell(7, 5, "Tổng cộng năm 2023 (04/2023-06/2024)")
+        wb_ranges = detect_fiscal_ranges_from_workbook(wb)
+        self.assertEqual(wb_ranges[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 6, 30)))
+        self.assertEqual(extract_ky_fiscal_year("2405", datetime.datetime(2024, 5, 20), 4, fiscal_ranges=wb_ranges), 2023)
+        self.assertEqual(extract_ky_fiscal_year("240615", datetime.datetime(2024, 6, 20), 4, fiscal_ranges=wb_ranges), 2023)
+
+        ntnn_dissolve_rows = [
+            {"ky": "2402", "ky_year": 2024, "gd": "TK", "tm": "1052", "so_tien": 10_000_000.0, "ngay_ht": datetime.datetime(2024, 3, 15), "ht_year": 2024, "no_co": ""},
+            {"ky": "2402", "ky_year": 2024, "gd": "C2", "tm": "1052", "so_tien": -10_000_000.0, "ngay_ht": datetime.datetime(2024, 3, 15), "ht_year": 2024, "no_co": ""},
+            # Tháng 05/2024 (nằm trong kỳ gộp giải thể 04/2023-06/2024): cả phát sinh TK và số nộp C2 đều phải về năm 2023!
+            {"ky": "2405", "ky_year": 2024, "gd": "TK", "tm": "1052", "so_tien": 7_000_000.0, "ngay_ht": datetime.datetime(2024, 5, 25), "ht_year": 2024, "no_co": ""},
+            {"ky": "2405", "ky_year": 2024, "gd": "C2", "tm": "1052", "so_tien": -7_000_000.0, "ngay_ht": datetime.datetime(2024, 5, 25), "ht_year": 2024, "no_co": ""},
+        ]
+        m_dis = compute_tq_metrics(ntnn_dissolve_rows, 2023, 2023, fiscal_start_month=4, is_ntnn=True, fiscal_ranges=wb_ranges)
+        self.assertEqual(round(m_dis["tndn_tk_qt_by_ky"][2023]), 17_000_000)
+        self.assertEqual(round(m_dis["tndn_c2_by_ht"][2023]), 17_000_000)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ Tích hợp trực tiếp vào ứng dụng Desktop (app.py) cho cả 2 chế đ
 """
 from __future__ import annotations
 
+import calendar
 import datetime
 import os
 import re
@@ -57,24 +58,59 @@ def extract_ky_year(ky_val: Any, ngay_ht: Optional[datetime.datetime] = None) ->
     return None
 
 
+def _resolve_date_to_fiscal_year(
+    ref_date: datetime.date,
+    fiscal_start_month: int = 1,
+    fiscal_ranges: Optional[Dict[int, Tuple[datetime.date, datetime.date]]] = None,
+) -> int:
+    """
+    Quy đổi một ngày thực tế (ref_date) sang Năm tài chính:
+    1. Ưu tiên đối chiếu theo khoảng (start_date, end_date) thực tế từng năm trong fiscal_ranges
+       (xử lý chính xác tuyệt đối năm tài chính gộp giải thể / năm đầu <= 15 tháng, VD 04/2023-06/2024 -> 2023).
+    2. Nếu không nằm trong fiscal_ranges thì fallback theo fiscal_start_month.
+    """
+    if fiscal_ranges:
+        for fy, (f_start, f_end) in sorted(fiscal_ranges.items()):
+            if f_start <= ref_date <= f_end:
+                return fy
+    if fiscal_start_month <= 1:
+        return ref_date.year
+    return ref_date.year if ref_date.month >= fiscal_start_month else ref_date.year - 1
+
+
 def extract_ky_fiscal_year(
     ky_val: Any,
     ngay_ht: Optional[datetime.datetime] = None,
     fiscal_start_month: int = 1,
+    fiscal_ranges: Optional[Dict[int, Tuple[datetime.date, datetime.date]]] = None,
 ) -> Optional[int]:
     """
-    Trích xuất NĂM TÀI CHÍNH của Kỳ báo cáo khi doanh nghiệp lệch kỳ (VD fiscal_start_month=4: 04/YYYY..03/(YYYY+1)):
-    - Nếu fiscal_start_month <= 1: giống hệt extract_ky_year.
-    - Nếu fiscal_start_month == 4:
+    Trích xuất NĂM TÀI CHÍNH của Kỳ báo cáo khi doanh nghiệp lệch kỳ (VD fiscal_start_month=4: 04/YYYY..03/(YYYY+1))
+    hoặc có năm tài chính gộp giải thể <= 15 tháng (VD 04/2023..06/2024 trong fiscal_ranges):
+    - Nếu fiscal_start_month <= 1 và không có fiscal_ranges: giống hệt extract_ky_year.
+    - Nếu có fiscal_ranges (VD {2023: (2023-04-01, 2024-06-30)}):
+        * '2404', '2405', '2406', '15/05/2024', '240515' -> năm tài chính 2023 (đồng nhất tờ khai & tổng quan!).
+    - Nếu fiscal_start_month == 4 (fallback khi ngoài fiscal_ranges):
         * '2001', '2002', '2003', '200215', '15/02/2020', '2020-02-15', '20200215' -> năm tài chính 2019
         * '2004'..'2012', '2101'..'2103', '210215', '15/02/2021', '2021-02-15'     -> năm tài chính 2020
         * '20Q1' -> 2019; '20Q2'..'20Q4', '21Q1' -> 2020
         * '20CN', '2020' -> 2020
     """
-    if fiscal_start_month <= 1:
+    if fiscal_start_month <= 1 and not fiscal_ranges:
         return extract_ky_year(ky_val, ngay_ht)
-    if isinstance(ky_val, (datetime.datetime, datetime.date)):
-        return ky_val.year if ky_val.month >= fiscal_start_month else ky_val.year - 1
+
+    def _from_ym(yr: int, mo: int, day: int = 15) -> int:
+        max_d = calendar.monthrange(yr, mo)[1]
+        return _resolve_date_to_fiscal_year(
+            datetime.date(yr, mo, min(max(day, 1), max_d)),
+            fiscal_start_month,
+            fiscal_ranges,
+        )
+
+    if isinstance(ky_val, datetime.datetime):
+        return _resolve_date_to_fiscal_year(ky_val.date(), fiscal_start_month, fiscal_ranges)
+    if isinstance(ky_val, datetime.date):
+        return _resolve_date_to_fiscal_year(ky_val, fiscal_start_month, fiscal_ranges)
     if ky_val is not None:
         if isinstance(ky_val, float) and ky_val.is_integer():
             s = str(int(ky_val))
@@ -85,18 +121,15 @@ def extract_ky_fiscal_year(
         # 1. Định dạng YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD (bao gồm cả chuỗi '2021-02-15 00:00:00')
         m_iso = re.search(r"(20\d{2})[/.\-](0?[1-9]|1[0-2])[/.\-](\d{1,2})", s)
         if m_iso:
-            yr, mo = int(m_iso.group(1)), int(m_iso.group(2))
-            return yr if mo >= fiscal_start_month else yr - 1
+            return _from_ym(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
         # 2. Định dạng DD/MM/YYYY / DD-MM-YYYY / DD.MM.YYYY (kể cả D/15/02/2021)
         m_dfull = re.search(r"(\d{1,2})[/.\-](0?[1-9]|1[0-2])[/.\-](20\d{2})", s)
         if m_dfull:
-            mo, yr = int(m_dfull.group(2)), int(m_dfull.group(3))
-            return yr if mo >= fiscal_start_month else yr - 1
+            return _from_ym(int(m_dfull.group(3)), int(m_dfull.group(2)), int(m_dfull.group(1)))
         # 3. Định dạng 8 chữ số YYYYMMDD (VD: 20210215)
         m_ymd8 = re.fullmatch(r"(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])", s)
         if m_ymd8:
-            yr, mo = int(m_ymd8.group(1)), int(m_ymd8.group(2))
-            return yr if mo >= fiscal_start_month else yr - 1
+            return _from_ym(int(m_ymd8.group(1)), int(m_ymd8.group(2)), int(m_ymd8.group(3)))
         # 4. Định dạng 6 chữ số: phân biệt YYMMDD (VD: 210215, 200215) và YYYYMM (VD: 202102)
         if re.fullmatch(r"\d{6}", s):
             y4, m_tail = int(s[:4]), int(s[4:6])
@@ -104,41 +137,38 @@ def extract_ky_fiscal_year(
             is_valid_yyyymm = (2010 <= y4 <= 2039) and (1 <= m_tail <= 12)
             is_valid_yymmdd = (2010 <= y2 <= 2039) and (1 <= m_mid <= 12) and (1 <= d_tail <= 31)
             if is_valid_yymmdd and not is_valid_yyyymm:
-                return y2 if m_mid >= fiscal_start_month else y2 - 1
+                return _from_ym(y2, m_mid, d_tail)
             if is_valid_yyyymm and not is_valid_yymmdd:
-                return y4 if m_tail >= fiscal_start_month else y4 - 1
+                return _from_ym(y4, m_tail)
             if is_valid_yymmdd and is_valid_yyyymm:
                 # Nếu có ngay_ht, ưu tiên cách hiểu gần với năm hạch toán hơn
                 if ngay_ht and abs(y2 - ngay_ht.year) < abs(y4 - ngay_ht.year):
-                    return y2 if m_mid >= fiscal_start_month else y2 - 1
-                return y4 if m_tail >= fiscal_start_month else y4 - 1
+                    return _from_ym(y2, m_mid, d_tail)
+                return _from_ym(y4, m_tail)
         # 5. Định dạng 4 chữ số YYMM (VD: 2102, 2403 hoặc có hậu tố như 2403L1 / 2403PS)
         m_ym = re.match(r"^(\d{2})(0[1-9]|1[0-2])(?:\D.*)?$", s)
         if m_ym:
-            yr, mo = 2000 + int(m_ym.group(1)), int(m_ym.group(2))
-            return yr if mo >= fiscal_start_month else yr - 1
+            return _from_ym(2000 + int(m_ym.group(1)), int(m_ym.group(2)))
         # 6. Định dạng quý YYQ1..4
         m_yq = re.search(r"\b(\d{2})Q([1-4])\b", s)
         if m_yq:
             yr, q = 2000 + int(m_yq.group(1)), int(m_yq.group(2))
             q_mo = (q - 1) * 3 + 1
-            return yr if q_mo >= fiscal_start_month else yr - 1
+            return _from_ym(yr, q_mo)
         # 7. Định dạng MM/YYYY hoặc T02/2021 hoặc có tiền tố/hậu tố (VD: 'PS 03/2024', '03/2024 (BS)')
         m_mfull = re.search(r"(?:^|[^0-9])T?(0?[1-9]|1[0-2])[/.\-](20\d{2})(?:$|[^0-9])", s)
         if m_mfull:
-            mo, yr = int(m_mfull.group(1)), int(m_mfull.group(2))
-            return yr if mo >= fiscal_start_month else yr - 1
+            return _from_ym(int(m_mfull.group(2)), int(m_mfull.group(1)))
         # 8. Định dạng YYYY/MM hoặc YYYY-MM
         m_ymfull = re.search(r"(?:^|[^0-9])(20\d{2})[/.\-](0?[1-9]|1[0-2])(?:$|[^0-9])", s)
         if m_ymfull:
-            yr, mo = int(m_ymfull.group(1)), int(m_ymfull.group(2))
-            return yr if mo >= fiscal_start_month else yr - 1
+            return _from_ym(int(m_ymfull.group(1)), int(m_ymfull.group(2)))
         # 9. Định dạng Q1/2021
         m_qfull = re.search(r"Q([1-4])[/.\-](20\d{2})", s)
         if m_qfull:
             q, yr = int(m_qfull.group(1)), int(m_qfull.group(2))
             q_mo = (q - 1) * 3 + 1
-            return yr if q_mo >= fiscal_start_month else yr - 1
+            return _from_ym(yr, q_mo)
         # 10. Định dạng cả năm YYCN hoặc YYYY
         m_cn = re.match(r"^(\d{2})CN$", s)
         if m_cn:
@@ -147,8 +177,47 @@ def extract_ky_fiscal_year(
         if m_full:
             return int(m_full.group(1))
     if ngay_ht:
-        return ngay_ht.year if ngay_ht.month >= fiscal_start_month else ngay_ht.year - 1
+        return _resolve_date_to_fiscal_year(ngay_ht.date(), fiscal_start_month, fiscal_ranges)
     return None
+
+
+def detect_fiscal_ranges_from_workbook(wb: openpyxl.Workbook) -> Dict[int, Tuple[datetime.date, datetime.date]]:
+    """
+    Trích xuất chính xác khoảng thời gian (start_date, end_date) từng năm tài chính từ các dòng nhãn
+    'Tổng cộng năm YYYY (MM/YYYY-MM/YYYY)' trên sheet 'So Thue GTGT Cuoi (Lech ky)' hoặc 'So Thue NTNN Cuoi (Lech ky)'.
+    Đảm bảo đồng nhất 100% kể cả năm tài chính gộp giải thể / năm đầu <= 15 tháng (VD 04/2023-06/2024).
+    """
+    gtgt_lk = None
+    ntnn_lk = None
+    for s in wb.sheetnames:
+        sl = s.strip().lower()
+        if "lech ky" in sl:
+            if "ntnn" in sl:
+                ntnn_lk = s
+            else:
+                gtgt_lk = s
+
+    ranges: Dict[int, Tuple[datetime.date, datetime.date]] = {}
+    pat = re.compile(
+        r"tổng\s+cộng\s+năm\s+(20\d{2})\s*\((\d{1,2})/(20\d{2})\s*[-–]\s*(\d{1,2})/(20\d{2})\)",
+        re.IGNORECASE,
+    )
+    for sname, label_col in ((gtgt_lk, 5), (ntnn_lk, 6)):
+        if not sname:
+            continue
+        ws = wb[sname]
+        for r in range(2, ws.max_row + 1):
+            val_lbl = str(ws.cell(r, label_col).value or "").strip()
+            m = pat.search(val_lbl)
+            if not m:
+                continue
+            fy = int(m.group(1))
+            m1, y1 = int(m.group(2)), int(m.group(3))
+            m2, y2 = int(m.group(4)), int(m.group(5))
+            if 1 <= m1 <= 12 and 1 <= m2 <= 12:
+                last_d = calendar.monthrange(y2, m2)[1]
+                ranges.setdefault(fy, (datetime.date(y1, m1, 1), datetime.date(y2, m2, last_d)))
+    return ranges
 
 
 def detect_fiscal_start_month(wb: openpyxl.Workbook) -> int:
@@ -402,6 +471,7 @@ def compute_tq_metrics(
     end_year: int,
     fiscal_start_month: int = 1,
     is_ntnn: bool = False,
+    fiscal_ranges: Optional[Dict[int, Tuple[datetime.date, datetime.date]]] = None,
 ) -> Dict[str, Any]:
     """
     Tính toán toàn bộ chỉ số từ dữ liệu TQ theo đúng chuẩn nghiệp vụ thanh tra - kiểm tra thuế:
@@ -499,12 +569,13 @@ def compute_tq_metrics(
         val = item["so_tien"]
         ngay_ht_dt = item.get("ngay_ht")
 
-        # Với GTGT (1701) hoặc Toàn bộ Thuế Nhà Thầu (is_ntnn=True: cả 1701 & 1052) khi doanh nghiệp lệch kỳ (VD tháng 4):
-        # quy đổi cả ky_y và ht_y sang Năm tài chính lệch kỳ!
-        if fiscal_start_month > 1 and (tm == "1701" or is_ntnn):
-            ky_y = extract_ky_fiscal_year(ky, ngay_ht_dt, fiscal_start_month)
+        # Với GTGT (1701) hoặc Toàn bộ Thuế Nhà Thầu (is_ntnn=True: cả 1701 & 1052) khi doanh nghiệp lệch kỳ
+        # hoặc có năm tài chính gộp giải thể <= 15 tháng (VD 04/2023-06/2024):
+        # quy đổi ĐỒNG NHẤT cả ky_y (phát sinh) và ht_y (số nộp C2) theo cùng khoảng fiscal_ranges!
+        if (fiscal_start_month > 1 or fiscal_ranges) and (tm == "1701" or is_ntnn):
+            ky_y = extract_ky_fiscal_year(ky, ngay_ht_dt, fiscal_start_month, fiscal_ranges=fiscal_ranges)
             if ngay_ht_dt is not None:
-                ht_y = ngay_ht_dt.year if ngay_ht_dt.month >= fiscal_start_month else ngay_ht_dt.year - 1
+                ht_y = _resolve_date_to_fiscal_year(ngay_ht_dt.date(), fiscal_start_month, fiscal_ranges)
             else:
                 ht_y = item["ht_year"]
         else:
@@ -1100,7 +1171,14 @@ def integrate_tq_and_qhns_into_workbook(
 
     start_year, end_year = years[0], years[-1]
     eff_fiscal_month = fiscal_start_month if (fiscal_start_month is not None and 1 <= fiscal_start_month <= 12) else detect_fiscal_start_month(wb)
-    metrics = compute_tq_metrics(tq_rows, start_year, end_year, fiscal_start_month=eff_fiscal_month)
+    eff_fiscal_ranges = detect_fiscal_ranges_from_workbook(wb)
+    metrics = compute_tq_metrics(
+        tq_rows,
+        start_year,
+        end_year,
+        fiscal_start_month=eff_fiscal_month,
+        fiscal_ranges=eff_fiscal_ranges,
+    )
     decl_vals = _eval_year_sheet_values(excel_path, years)
 
     # Tính riêng phần TNCN phân bổ (PP, tiểu mục 1001) hạch toán tại các CQT khác để CỘNG vào số phát sinh TNCN (F90 & QHNS Cột 4)
@@ -1130,6 +1208,7 @@ def integrate_tq_and_qhns_into_workbook(
             end_year,
             fiscal_start_month=eff_fiscal_month,
             is_ntnn=True,
+            fiscal_ranges=eff_fiscal_ranges,
         )
 
     # 3. Chép sheet TQ (và TQ_NTNN nếu có) vào workbook đích

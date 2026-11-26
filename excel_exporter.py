@@ -2211,9 +2211,9 @@ def detect_tndn_fiscal_ranges(tndn_decls: List[TaxDeclaration]) -> Dict[int, Tup
             next_start = ranges[yr + 1][0]
             if f_end >= next_start:
                 f_end = next_start - datetime.timedelta(days=1)
-        # 2. Nếu vẫn vượt quá 12 tháng (> 370 ngày) khi doanh nghiệp có chu kỳ lệch kỳ 12 tháng ổn định
-        #    (VD kế toán gõ nhầm hạn nộp 30/06/2024 vào Đến ngày của kỳ 04/2023-03/2024)
-        if (f_end - f_start).days > 370 and f_start.month > 1:
+        # 2. Cho phép kỳ tính thuế giải thể / năm đầu thành lập gộp hợp lệ <= 15 tháng (<= 460 ngày theo Luật Thuế TNDN)
+        #    khi KHÔNG có năm Y+1 chồng lấn; chỉ chuẩn hóa về 12 tháng nếu vượt > 460 ngày (lỗi nhập liệu bất thường).
+        if (f_end - f_start).days > 460 and f_start.month > 1:
             if common_start_m is None or f_start.month == common_start_m:
                 end_m = f_start.month - 1
                 end_y = f_start.year + 1
