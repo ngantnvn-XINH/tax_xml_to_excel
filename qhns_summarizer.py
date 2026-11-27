@@ -569,18 +569,17 @@ def compute_tq_metrics(
         val = item["so_tien"]
         ngay_ht_dt = item.get("ngay_ht")
 
-        # Với GTGT (1701) hoặc Toàn bộ Thuế Nhà Thầu (is_ntnn=True: cả 1701 & 1052) khi doanh nghiệp lệch kỳ
-        # hoặc có năm tài chính gộp giải thể <= 15 tháng (VD 04/2023-06/2024):
-        # quy đổi ĐỒNG NHẤT cả ky_y (phát sinh) và ht_y (số nộp C2) theo cùng khoảng fiscal_ranges!
+        # Quy tắc nghiệp vụ đơn vị lệch kỳ / giải thể gộp <= 15 tháng:
+        # - TNCN (1001), TNDN công ty (1052), LPMB: KHÔNG lệch kỳ (ky_y = năm dương lịch).
+        # - GTGT (1701) & Toàn bộ Thuế Nhà Thầu (is_ntnn=True: cả 1701 & 1052):
+        #   * Số PHÁT SINH (ky_y) lấy theo năm tài chính lệch kỳ (VD 04/YYYY..03/(YYYY+1), hoặc kỳ gộp giải thể <= 15 tháng)
+        #     để đối chiếu khớp 100% với tờ khai và xác định đúng Số đầu kỳ (trước ngày đầu năm tài chính).
+        #   * Số ĐÃ NỘP NSNN (ht_y: C2/HC/NT/C5) lấy ĐỒNG NHẤT theo NGÀY HẠCH TOÁN CỦA NĂM DƯƠNG LỊCH (01/01..31/12)!
         if (fiscal_start_month > 1 or fiscal_ranges) and (tm == "1701" or is_ntnn):
             ky_y = extract_ky_fiscal_year(ky, ngay_ht_dt, fiscal_start_month, fiscal_ranges=fiscal_ranges)
-            if ngay_ht_dt is not None:
-                ht_y = _resolve_date_to_fiscal_year(ngay_ht_dt.date(), fiscal_start_month, fiscal_ranges)
-            else:
-                ht_y = item["ht_year"]
         else:
             ky_y = item["ky_year"]
-            ht_y = item["ht_year"]
+        ht_y = item["ht_year"]
 
         # Bỏ qua bút toán bù trừ nội bộ (BT) vì mỗi cặp BT luôn tự triệt tiêu về 0
         if gd == "BT":

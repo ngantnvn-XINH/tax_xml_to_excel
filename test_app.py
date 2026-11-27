@@ -1655,37 +1655,41 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertIn('SUMIF($V$2:$V$3,"Hợp lệ"', str(ws_th.cell(4, 21).value))
 
     def test_v16_offset_fiscal_year_gtgt_opening_and_no_c2_tk_double_count(self) -> None:
-        """Kiểm thử v1.6: Đơn vị lệch kỳ (01/04..31/03) lấy đầu kỳ GTGT trước tháng 4 nộp sang kỳ kiểm tra, và KHÔNG cộng trùng (+C2)+(+TK/QT)."""
+        """Kiểm thử v1.6: Đơn vị lệch kỳ (01/04..31/03): phát sinh GTGT lệch kỳ, đầu kỳ trước 01/04, số nộp C2 theo năm dương lịch 01/01..31/12, KHÔNG cộng trùng (+C2)+(+TK/QT)."""
         import datetime
         from qhns_summarizer import compute_tq_metrics
 
         tq_rows = [
-            # Kỳ 02/2020 (2002): TK +50tr (ht 18/03/2020), C2 -50tr (ht 19/03/2020) -> xong trước 01/04/2020, KHÔNG vào đầu kỳ 2020
+            # Kỳ 11/2019 (1911): đã nộp xong trong năm dương lịch 2019 -> KHÔNG vào đầu kỳ 2020
+            {"ky": "1911", "ky_year": 2019, "gd": "TK", "tm": "1701", "so_tien": 60_000_000.0, "ngay_ht": datetime.datetime(2019, 12, 18), "ht_year": 2019, "no_co": ""},
+            {"ky": "1911", "ky_year": 2019, "gd": "C2", "tm": "1701", "so_tien": -60_000_000.0, "ngay_ht": datetime.datetime(2019, 12, 19), "ht_year": 2019, "no_co": ""},
+            # Kỳ 02/2020 (2002): thuộc kỳ trước (< 01/04/2020), nộp trong năm dương lịch 2020 (19/03/2020) -> vào đầu kỳ 50tr & đã nộp 2020 50tr
             {"ky": "2002", "ky_year": 2020, "gd": "TK", "tm": "1701", "so_tien": 50_000_000.0, "ngay_ht": datetime.datetime(2020, 3, 18), "ht_year": 2020, "no_co": ""},
             {"ky": "2002", "ky_year": 2020, "gd": "C2", "tm": "1701", "so_tien": -50_000_000.0, "ngay_ht": datetime.datetime(2020, 3, 19), "ht_year": 2020, "no_co": ""},
-            # Kỳ 03/2020 (2003): thuộc kỳ trước (< 01/04/2020), TK +80tr & C2 -80tr đều hạch toán 20/04/2020 -> Đầu kỳ = ĐÚNG 80tr (KHÔNG phải 160tr!)
+            # Kỳ 03/2020 (2003): thuộc kỳ trước (< 01/04/2020), TK +80tr & C2 -80tr hạch toán 20/04/2020 -> Đầu kỳ += ĐÚNG 80tr (KHÔNG phải 160tr!)
             {"ky": "2003", "ky_year": 2020, "gd": "TK", "tm": "1701", "so_tien": 80_000_000.0, "ngay_ht": datetime.datetime(2020, 4, 20), "ht_year": 2020, "no_co": ""},
             {"ky": "2003", "ky_year": 2020, "gd": "C2", "tm": "1701", "so_tien": -80_000_000.0, "ngay_ht": datetime.datetime(2020, 4, 20), "ht_year": 2020, "no_co": ""},
-            # Kỳ 04/2020 (2004) & 01/2021 (2101): thuộc năm tài chính lệch kỳ 2020 (04/2020..03/2021)
+            # Kỳ 04/2020 (2004) & 01/2021 (2101): phát sinh thuộc năm tài chính lệch kỳ 2020 (04/2020..03/2021);
+            # riêng C2 nộp tháng 02/2021 có ngày hạch toán năm dương lịch 2021 -> KHÔNG vào đã nộp 2020!
             {"ky": "2004", "ky_year": 2020, "gd": "TK", "tm": "1701", "so_tien": 30_000_000.0, "ngay_ht": datetime.datetime(2020, 5, 20), "ht_year": 2020, "no_co": ""},
             {"ky": "2004", "ky_year": 2020, "gd": "C2", "tm": "1701", "so_tien": -30_000_000.0, "ngay_ht": datetime.datetime(2020, 5, 20), "ht_year": 2020, "no_co": ""},
             {"ky": "2101", "ky_year": 2021, "gd": "TK", "tm": "1701", "so_tien": 25_000_000.0, "ngay_ht": datetime.datetime(2021, 2, 20), "ht_year": 2021, "no_co": ""},
             {"ky": "2101", "ky_year": 2021, "gd": "C2", "tm": "1701", "so_tien": -25_000_000.0, "ngay_ht": datetime.datetime(2021, 2, 20), "ht_year": 2021, "no_co": ""},
-            # Kiểm tra thêm QT kỳ trước (15CN) vừa có QT +40tr vừa có C2 -40tr trong kỳ kiểm tra -> Đầu kỳ = ĐÚNG 40tr (KHÔNG cộng đôi thành 80tr!)
+            # Kiểm tra thêm QT kỳ trước (15CN) vừa có QT +40tr vừa có C2 -40tr trong năm 2020 -> Đầu kỳ += ĐÚNG 40tr (KHÔNG cộng đôi thành 80tr!)
             {"ky": "15CN", "ky_year": 2015, "gd": "QT", "tm": "1701", "so_tien": 40_000_000.0, "ngay_ht": datetime.datetime(2020, 6, 15), "ht_year": 2020, "no_co": ""},
             {"ky": "15CN", "ky_year": 2015, "gd": "C2", "tm": "1701", "so_tien": -40_000_000.0, "ngay_ht": datetime.datetime(2020, 6, 18), "ht_year": 2020, "no_co": ""},
         ]
 
         m = compute_tq_metrics(tq_rows, 2020, 2020, fiscal_start_month=4)
-        # Đầu kỳ GTGT = 80tr (kỳ 2003) + 40tr (QT 15CN) = 120tr (KHÔNG cộng đôi!)
-        self.assertEqual(round(m["dk_gtgt_c2_prev"] + m["dk_gtgt_qt_truoc"]), 120_000_000)
-        self.assertEqual(round(m["opening_exact"]["1701"]), 120_000_000)
-        # Phát sinh GTGT năm tài chính 2020 (04/2020..03/2021) = 30tr (2004) + 25tr (2101) = 55tr
+        # Đầu kỳ GTGT (các kỳ trước 01/04/2020 nộp trong năm dương lịch 2020) = 50tr (2002) + 80tr (2003) + 40tr (15CN) = 170tr
+        self.assertEqual(round(m["dk_gtgt_c2_prev"] + m["dk_gtgt_qt_truoc"]), 170_000_000)
+        self.assertEqual(round(m["opening_exact"]["1701"]), 170_000_000)
+        # Phát sinh GTGT năm tài chính lệch kỳ 2020 (04/2020..03/2021) = 30tr (2004) + 25tr (2101) = 55tr
         self.assertEqual(round(m["gtgt_tk_by_ky"][2020]), 55_000_000)
-        # Đã nộp GTGT năm tài chính 2020 = 80tr (2003) + 30tr (2004) + 25tr (2101) + 40tr (15CN) = 175tr
-        self.assertEqual(round(m["gtgt_c2_by_ht"][2020]), 175_000_000)
-        # Dư cuối kỳ = 120tr + 55tr - 175tr = 0 (KHỚP 100%!)
-        self.assertEqual(round(m["opening_exact"]["1701"] + m["gtgt_tk_by_ky"][2020] - m["gtgt_c2_by_ht"][2020]), 0)
+        # Đã nộp GTGT theo năm dương lịch 2020 (01/01/2020..31/12/2020) = 50tr (2002) + 80tr (2003) + 30tr (2004) + 40tr (15CN) = 200tr
+        self.assertEqual(round(m["gtgt_c2_by_ht"][2020]), 200_000_000)
+        # Dư cuối kỳ 2020 = 170tr + 55tr - 200tr = 25tr (đúng bằng kỳ 01/2021 nộp sang năm dương lịch 2021!)
+        self.assertEqual(round(m["opening_exact"]["1701"] + m["gtgt_tk_by_ky"][2020] - m["gtgt_c2_by_ht"][2020]), 25_000_000)
 
     def test_v16_ntnn_merge_two_msts_and_flag_duplicates(self) -> None:
         """Kiểm thử v1.6: Gộp NTNN từ cả 2 thư mục (MST công ty chính + MST nhà thầu riêng), báo trùng trên So Thue NTNN TH và tự loại bản trùng khi tổng hợp trên So Thue NTNN Cuoi."""
@@ -2166,7 +2170,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
         fr_dissolve = detect_tndn_fiscal_ranges([d22, d23])
         self.assertEqual(fr_dissolve[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 6, 30)))
 
-        # 4. Kiểm tra đồng nhất phát sinh (TK) & số nộp (C2) trong năm giải thể 15 tháng (04/2023-06/2024) trên TQ & TQ_NTNN
+        # 4. Kiểm tra phát sinh (TK) gộp theo năm giải thể 15 tháng (04/2023-06/2024) & số nộp (C2) đồng nhất theo năm dương lịch (01/01-31/12)
         ws.cell(7, 5, "Tổng cộng năm 2023 (04/2023-06/2024)")
         wb_ranges = detect_fiscal_ranges_from_workbook(wb)
         self.assertEqual(wb_ranges[2023], (datetime.date(2023, 4, 1), datetime.date(2024, 6, 30)))
@@ -2174,15 +2178,21 @@ class TestTaxXmlToExcel(unittest.TestCase):
         self.assertEqual(extract_ky_fiscal_year("240615", datetime.datetime(2024, 6, 20), 4, fiscal_ranges=wb_ranges), 2023)
 
         ntnn_dissolve_rows = [
+            {"ky": "2310", "ky_year": 2023, "gd": "TK", "tm": "1052", "so_tien": 12_000_000.0, "ngay_ht": datetime.datetime(2023, 11, 15), "ht_year": 2023, "no_co": ""},
+            {"ky": "2310", "ky_year": 2023, "gd": "C2", "tm": "1052", "so_tien": -12_000_000.0, "ngay_ht": datetime.datetime(2023, 11, 15), "ht_year": 2023, "no_co": ""},
             {"ky": "2402", "ky_year": 2024, "gd": "TK", "tm": "1052", "so_tien": 10_000_000.0, "ngay_ht": datetime.datetime(2024, 3, 15), "ht_year": 2024, "no_co": ""},
             {"ky": "2402", "ky_year": 2024, "gd": "C2", "tm": "1052", "so_tien": -10_000_000.0, "ngay_ht": datetime.datetime(2024, 3, 15), "ht_year": 2024, "no_co": ""},
-            # Tháng 05/2024 (nằm trong kỳ gộp giải thể 04/2023-06/2024): cả phát sinh TK và số nộp C2 đều phải về năm 2023!
+            # Tháng 05/2024 (nằm trong kỳ gộp giải thể 04/2023-06/2024): phát sinh TK về năm 2023; số nộp C2 hạch toán 2024 thuộc năm dương lịch 2024!
             {"ky": "2405", "ky_year": 2024, "gd": "TK", "tm": "1052", "so_tien": 7_000_000.0, "ngay_ht": datetime.datetime(2024, 5, 25), "ht_year": 2024, "no_co": ""},
             {"ky": "2405", "ky_year": 2024, "gd": "C2", "tm": "1052", "so_tien": -7_000_000.0, "ngay_ht": datetime.datetime(2024, 5, 25), "ht_year": 2024, "no_co": ""},
         ]
-        m_dis = compute_tq_metrics(ntnn_dissolve_rows, 2023, 2023, fiscal_start_month=4, is_ntnn=True, fiscal_ranges=wb_ranges)
-        self.assertEqual(round(m_dis["tndn_tk_qt_by_ky"][2023]), 17_000_000)
-        self.assertEqual(round(m_dis["tndn_c2_by_ht"][2023]), 17_000_000)
+        m_dis = compute_tq_metrics(ntnn_dissolve_rows, 2023, 2024, fiscal_start_month=4, is_ntnn=True, fiscal_ranges=wb_ranges)
+        # Phát sinh lệch kỳ 15 tháng 2023 = 12tr + 10tr + 7tr = 29tr; phát sinh 2024 = 0
+        self.assertEqual(round(m_dis["tndn_tk_qt_by_ky"][2023]), 29_000_000)
+        self.assertEqual(round(m_dis["tndn_tk_qt_by_ky"][2024]), 0)
+        # Số nộp NSNN đồng nhất theo năm dương lịch: 2023 = 12tr; 2024 = 10tr + 7tr = 17tr
+        self.assertEqual(round(m_dis["tndn_c2_by_ht"][2023]), 12_000_000)
+        self.assertEqual(round(m_dis["tndn_c2_by_ht"][2024]), 17_000_000)
 
     def test_v16_selected_sheets_filtering(self) -> None:
         """Kiểm thử v1.6: Tích chọn sheet tùy chọn (tờ khai gốc & biểu từng năm luôn mặc định xuất)."""
