@@ -2241,6 +2241,28 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertNotIn("BaoCao_BienBan", names)
             self.assertNotIn("KiemSoat_GTGT", names)
 
+    def test_v16_tncn_2022_pp_only_december(self) -> None:
+        """Kiểm thử v1.6: Phát sinh TNCN năm 2022 trên TQ = TK + PP(Tháng 12) + TQ + TH (không cộng PP tháng 01..11/2022)."""
+        from qhns_summarizer import compute_tq_metrics
+
+        tq_rows = [
+            # Năm 2022: TK (100tr), PP T06 (15tr - BỎ), PP T11 (20tr - BỎ), PP T12 (30tr - CỘNG), TQ (5tr - CỘNG), TH (2tr - CỘNG)
+            {"ky": "2206", "ky_year": 2022, "gd": "TK", "tm": "1001", "so_tien": 100_000_000.0, "ngay_ht": datetime.datetime(2022, 7, 20), "ht_year": 2022, "no_co": ""},
+            {"ky": "2206", "ky_year": 2022, "gd": "PP", "tm": "1001", "so_tien": 15_000_000.0, "ngay_ht": datetime.datetime(2022, 7, 20), "ht_year": 2022, "no_co": ""},
+            {"ky": "2211", "ky_year": 2022, "gd": "PP", "tm": "1001", "so_tien": 20_000_000.0, "ngay_ht": datetime.datetime(2022, 12, 20), "ht_year": 2022, "no_co": ""},
+            {"ky": "2212", "ky_year": 2022, "gd": "PP", "tm": "1001", "so_tien": 30_000_000.0, "ngay_ht": datetime.datetime(2023, 1, 20), "ht_year": 2023, "no_co": ""},
+            {"ky": "22CN", "ky_year": 2022, "gd": "TQ", "tm": "1001", "so_tien": 5_000_000.0, "ngay_ht": datetime.datetime(2023, 3, 25), "ht_year": 2023, "no_co": ""},
+            {"ky": "22CN", "ky_year": 2022, "gd": "TH", "tm": "1001", "so_tien": 2_000_000.0, "ngay_ht": datetime.datetime(2023, 3, 25), "ht_year": 2023, "no_co": ""},
+            # Năm 2023: PP các tháng đều cộng bình thường (TK 50tr + PP T05 10tr = 60tr)
+            {"ky": "2305", "ky_year": 2023, "gd": "TK", "tm": "1001", "so_tien": 50_000_000.0, "ngay_ht": datetime.datetime(2023, 6, 20), "ht_year": 2023, "no_co": ""},
+            {"ky": "2305", "ky_year": 2023, "gd": "PP", "tm": "1001", "so_tien": 10_000_000.0, "ngay_ht": datetime.datetime(2023, 6, 20), "ht_year": 2023, "no_co": ""},
+        ]
+        m = compute_tq_metrics(tq_rows, 2022, 2023)
+        # 2022 = 100tr (TK) + 30tr (PP T12) + 5tr (TQ) + 2tr (TH) = 137tr (KHÔNG cộng 15tr & 20tr của PP T06, T11!)
+        self.assertEqual(round(m["tncn_tk_th_tq_by_ky"][2022]), 137_000_000)
+        # 2023 = 50tr + 10tr = 60tr
+        self.assertEqual(round(m["tncn_tk_th_tq_by_ky"][2023]), 60_000_000)
+
 
 if __name__ == "__main__":
     unittest.main()

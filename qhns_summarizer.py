@@ -465,6 +465,36 @@ TIEU_MUC_NAMES: Dict[str, str] = {
 }
 
 
+def _is_tncn_pp_allowed_for_year(ky_y: Optional[int], ky_val: Any) -> bool:
+    """
+    Quy tắc nghiệp vụ TNCN phân bổ (PP, tiểu mục 1001):
+    - Riêng năm 2022: chỉ cộng PP của kỳ Tháng 12/2022 (2212, 12/2022, T12/2022, 2022-12, 2022/12, 202212),
+      KHÔNG cộng PP các tháng 01..11/2022 -> Công thức năm 2022: TK + PP(Tháng 12) + TQ + TH.
+    - Các năm khác: cộng bình thường.
+    """
+    if ky_y != 2022:
+        return True
+    if isinstance(ky_val, (datetime.datetime, datetime.date)):
+        return ky_val.year == 2022 and ky_val.month == 12
+    if ky_val is None:
+        return False
+    if isinstance(ky_val, float) and ky_val.is_integer():
+        s = str(int(ky_val))
+    else:
+        s = str(ky_val).strip().upper()
+        if s.endswith(".0") and s[:-2].isdigit():
+            s = s[:-2]
+    if re.match(r"^2212(?:\D.*)?$", s):
+        return True
+    if re.fullmatch(r"202212(?:\d{2})?", s):
+        return True
+    if re.search(r"(?:^|[^0-9])T?12[/.\-]2022(?:$|[^0-9])", s):
+        return True
+    if re.search(r"(?:^|[^0-9])2022[/.\-]12(?:$|[^0-9])", s):
+        return True
+    return False
+
+
 def compute_tq_metrics(
     tq_rows: List[Dict[str, Any]],
     start_year: int,
@@ -629,7 +659,10 @@ def compute_tq_metrics(
             elif tm == "1052" and gd in ("TK", "TQ", "QT"):
                 metrics["tndn_tk_qt_by_ky"][ky_y] += val
                 in_bucket_a = True
-            elif tm == "1001" and gd in ("TK", "TH", "TQ", "PP"):
+            elif tm == "1001" and (
+                gd in ("TK", "TH", "TQ")
+                or (gd == "PP" and _is_tncn_pp_allowed_for_year(ky_y, ky))
+            ):
                 metrics["tncn_tk_th_tq_by_ky"][ky_y] += ledger_signed_amount(item)
                 in_bucket_a = True
                 if gd in ("TK", "PP") and ky:
@@ -1188,7 +1221,12 @@ def integrate_tq_and_qhns_into_workbook(
     all_c2_neg = bool(all_c2_vals and sum(1 for v in all_c2_vals if v < 0) >= len(all_c2_vals) / 2)
     tncn_pp_other_by_ky: Dict[int, float] = {y: 0.0 for y in years}
     for item in other_tq_rows:
-        if item["tm"] == "1001" and item["gd"] == "PP" and item["ky_year"] in years:
+        if (
+            item["tm"] == "1001"
+            and item["gd"] == "PP"
+            and item["ky_year"] in years
+            and _is_tncn_pp_allowed_for_year(item["ky_year"], item["ky"])
+        ):
             val = item["so_tien"]
             no_co = item.get("no_co", "")
             if no_co in ("C", "N") and not all_c2_neg and val >= 0:
@@ -1313,14 +1351,15 @@ def integrate_tq_and_qhns_into_workbook(
                 if pp_other_val != 0
                 else ""
             )
+            pp_tag = "PP(T12/2022)" if y == 2022 else "PP"
             if diff_tncn > 1000:
                 missing_p = sorted(metrics["tncn_c2_periods"][y] - metrics["tncn_tk_periods"][y])
                 miss_str = ", ".join(missing_p) if missing_p else f"năm {y}"
-                ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note} rà soát thiếu TK {miss_str}", "QHNS")
+                ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; {pp_tag} trên tổng quan{pp_note} rà soát thiếu TK {miss_str}", "QHNS")
                 tncn_missing_info[y] = miss_str
                 alerts.append(f"Năm {y} - Thuế TNCN: Tờ khai QTT ({c90_val:,.0f}) > Tổng quan ({f90_val:,.0f}), chênh lệch {diff_tncn:,.0f} -> Đưa vào Cột (5) Số xử lý qua thanh tra (thiếu TK {miss_str}).")
             else:
-                ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; PP trên tổng quan{pp_note}", "QHNS")
+                ws_y["F90"].comment = Comment(f"Phát sinh TK; TH; TQ; {pp_tag} trên tổng quan{pp_note}", "QHNS")
                 tncn_missing_info[y] = None
         else:
             gtgt_missing_info[y] = None
