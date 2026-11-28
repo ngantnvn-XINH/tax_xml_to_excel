@@ -811,6 +811,8 @@ def write_sheet_gdlk_30ebitda(
     r_cap30 = r_h2 + 7     # (7) 30% EBITDA được trừ
     r_dis = r_h2 + 8       # (8) Chi phí lãi vay bị loại (không được trừ)
     r_carry = r_h2 + 9     # (9) Hạn mức 30% EBITDA còn dư để nhận chuyển lãi vay 5 năm
+    r_used = r_h2 + 10     # (10) Chi phí lãi vay không được trừ các kỳ trước được chuyển vào kỳ này
+    r_rem = r_h2 + 11      # (11) Chi phí lãi vay không được trừ còn lại chuyển sang kỳ sau (tối đa 5 năm)
 
     b2_spec = [
         (r_ln, "(5)", "Lợi nhuận thuần từ hoạt động SXKD ([30] BCHDKD)", False, False),
@@ -820,8 +822,10 @@ def write_sheet_gdlk_30ebitda(
         (r_kh, "(4)", "Chi phí khấu hao TSCĐ trong kỳ (ưu tiên LCTT gián tiếp [02], fallback biến động hao mòn BCTC)", False, True),
         (r_ebitda, "(6)", "EBITDA (= (5) + (3) + (4))", True, False),
         (r_cap30, "(7)", "Chi phí lãi vay được trừ tối đa (= 30% x EBITDA)", True, False),
-        (r_dis, "(8)", "Chi phí lãi vay không được trừ trong kỳ (= MAX(0, (3) - (7)))", True, False),
-        (r_carry, "(9)", "Hạn mức 30% EBITDA còn dư để nhận chuyển chi phí lãi vay từ kỳ trước (tối đa 5 năm từ 2019)", False, False),
+        (r_dis, "(8)", "Chi phí lãi vay không được trừ phát sinh trong kỳ (= MAX(0, (3) - (7)))", True, False),
+        (r_carry, "(9)", "Hạn mức 30% EBITDA còn dư để nhận chuyển chi phí lãi vay từ kỳ trước", False, False),
+        (r_used, "(10)", "Chi phí lãi vay không được trừ các kỳ trước được chuyển vào kỳ này (= MIN(Dư kỳ trước, (9)))", True, False),
+        (r_rem, "(11)", "Chi phí lãi vay không được trừ còn lại chuyển sang kỳ sau (tối đa 05 năm liên tục)", True, False),
     ]
 
     for rr, stt_s, lbl, is_b, is_inp in b2_spec:
@@ -830,6 +834,7 @@ def write_sheet_gdlk_30ebitda(
         for idx, yr in enumerate(years):
             col_i = 3 + idx
             col_l = get_column_letter(col_i)
+            prev_col_l = get_column_letter(col_i - 1) if idx > 0 else None
             cmt_txt = None
             if rr == r_ln:
                 val = _kq_cell_ref(kq_sheet, kq_coords, yr, "ln_thuan")
@@ -851,8 +856,21 @@ def write_sheet_gdlk_30ebitda(
                 val = f"=MAX(0,ROUND(0.3*{col_l}{r_ebitda},0))"
             elif rr == r_dis:
                 val = f"=MAX(0,{col_l}{r_lv_net}-{col_l}{r_cap30})"
-            else:
+            elif rr == r_carry:
                 val = f"=MAX(0,{col_l}{r_cap30}-MAX(0,{col_l}{r_lv_net}))"
+            elif rr == r_used:
+                if prev_col_l is None:
+                    val = 0
+                    cmt_txt = "Năm đầu giai đoạn: nếu có số dư lãi vay không được trừ từ các năm trước chuyển sang (trong hạn 5 năm), nhập bổ sung để theo dõi."
+                else:
+                    val = f"=MIN({prev_col_l}{r_rem},{col_l}{r_carry})"
+                    if idx >= 6:
+                        cmt_txt = "Lưu ý kiểm tra thời hiệu 05 năm liên tục (điểm b Khoản 3 Điều 16 NĐ 132/2020): khoản lãi vay không được trừ quá 5 năm sẽ hết hạn chuyển."
+            else:
+                if prev_col_l is None:
+                    val = f"=MAX(0,{col_l}{r_dis}-{col_l}{r_used})"
+                else:
+                    val = f"=MAX(0,{prev_col_l}{r_rem}+{col_l}{r_dis}-{col_l}{r_used})"
             c = ws.cell(rr, col_i, val)
             c.number_format = "#,##0"
             c.alignment = al_r
@@ -865,10 +883,10 @@ def write_sheet_gdlk_30ebitda(
             c.border = b_thin
             if is_inp and ci >= 3:
                 c.fill = fill_input
-            elif rr in (r_ebitda, r_cap30, r_dis):
+            elif rr in (r_ebitda, r_cap30, r_dis, r_rem):
                 c.fill = fill_hl
 
-    r_note = r_carry + 2
+    r_note = r_rem + 2
     ws.merge_cells(f"A{r_note}:{last_col_l}{r_note}")
     ws.cell(
         r_note,

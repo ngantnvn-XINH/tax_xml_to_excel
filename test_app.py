@@ -2123,6 +2123,8 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertIn("'BCHDKD'!", str(ws_gd["C18"].value))  # CP lãi vay [17]
             self.assertEqual(ws_gd["C21"].value, 400_000_000)    # Khấu hao lấy trực tiếp từ LCTTGT [02]
             self.assertIn("0.3*C22", str(ws_gd["C23"].value))    # 30% EBITDA
+            self.assertEqual(ws_gd["C26"].value, 0)              # Năm đầu chuyển kỳ trước = 0
+            self.assertEqual(ws_gd["C27"].value, "=MAX(0,C24-C26)")  # Dư chuyển sang kỳ sau (5 năm)
 
     def test_v16_detect_fiscal_month_and_ntnn_tq_date_formats(self) -> None:
         """Kiểm thử v1.6: Nhận diện đúng tháng bắt đầu lệch kỳ ngay cả khi kỳ đầu là tháng 01 (thuộc NTC trước) & quy đổi đúng mọi định dạng kỳ ngày trên TQ_NTNN."""
