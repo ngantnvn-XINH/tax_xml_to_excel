@@ -579,12 +579,13 @@ def write_sheet_phan_tich_rui_ro(
         "STT",
         "Năm",
         "Phải thu KH\nngắn hạn [131]",
-        "Hàng tồn kho\n[141]",
+        "Hàng tồn kho\n[140] BCTC",
         "Phải trả người bán\nngắn hạn [311]",
         "Tổng vay ngắn &\ndài hạn [320+338]",
         "Thu nhập khác\n[31]",
         "Chi phí khác\n[32]",
-        "Quỹ lương chi trả\n(TNCN - Sheet năm)",
+        "Phải trả người lao động\n[314] BCTC",
+        "Tổng TNCT TNCN\n(Tờ khai QTT)",
         "Vốn góp CSH\n[411]",
     ]
     ws.row_dimensions[r_h2].height = 30
@@ -595,11 +596,12 @@ def write_sheet_phan_tich_rui_ro(
         c.alignment = al_c
         c.border = b_thin
 
-    def _bctc_ref(yr: int, code: str) -> Any:
+    def _bctc_ref(yr: int, code: str, fallback_codes: Tuple[str, ...] = ()) -> Any:
         if bctc_sheet and yr in bctc_coords:
             col_c, _, cmap = bctc_coords[yr]
-            if code in cmap:
-                return f"='{bctc_sheet}'!{col_c}{cmap[code]}"
+            for cd in (code,) + fallback_codes:
+                if cd in cmap:
+                    return f"='{bctc_sheet}'!{col_c}{cmap[cd]}"
         return 0
 
     def _bctc_loan_ref(yr: int) -> Any:
@@ -618,15 +620,16 @@ def write_sheet_phan_tich_rui_ro(
         r = r2_start + idx - 1
         ws.cell(r, 1, idx).alignment = al_c
         ws.cell(r, 2, yr).alignment = al_c
-        ws.cell(r, 3, _bctc_ref(yr, "131"))
-        ws.cell(r, 4, _bctc_ref(yr, "141"))
+        ws.cell(r, 3, _bctc_ref(yr, "131", ("130",)))
+        ws.cell(r, 4, _bctc_ref(yr, "140", ("141",)))
         ws.cell(r, 5, _bctc_ref(yr, "311"))
         ws.cell(r, 6, _bctc_loan_ref(yr))
         ws.cell(r, 7, _kq_cell_ref(kq_sheet, kq_coords, yr, "thu_nhap_khac"))
         ws.cell(r, 8, _kq_cell_ref(kq_sheet, kq_coords, yr, "chi_phi_khac"))
-        ws.cell(r, 9, f"='{yr}'!C83" if str(yr) in wb.sheetnames else 0)
-        ws.cell(r, 10, _bctc_ref(yr, "411"))
-        for ci in range(1, 11):
+        ws.cell(r, 9, _bctc_ref(yr, "314", ("315",)))
+        ws.cell(r, 10, f"='{yr}'!C84+'{yr}'!C86+'{yr}'!C88" if str(yr) in wb.sheetnames else 0)
+        ws.cell(r, 11, _bctc_ref(yr, "411"))
+        for ci in range(1, 12):
             c = ws.cell(r, ci)
             c.font = f_reg
             c.border = b_thin
@@ -636,12 +639,12 @@ def write_sheet_phan_tich_rui_ro(
 
     r2_tot = r2_start + len(years)
     ws.cell(r2_tot, 2, "TỔNG CỘNG").alignment = al_c
-    for ci in range(3, 11):
+    for ci in range(3, 12):
         col_l = get_column_letter(ci)
         c = ws.cell(r2_tot, ci, f"=SUM({col_l}{r2_start}:{col_l}{r2_tot - 1})")
         c.number_format = "#,##0"
         c.alignment = al_r
-    for ci in range(1, 11):
+    for ci in range(1, 12):
         c = ws.cell(r2_tot, ci)
         c.font = f_bold
         c.fill = fill_tot

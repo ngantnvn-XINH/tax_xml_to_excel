@@ -2081,6 +2081,7 @@ class TestTaxXmlToExcel(unittest.TestCase):
             indicators={
                 "131_cuoi": 1_200_000_000,
                 "311_cuoi": 900_000_000,
+                "314_cuoi": 350_000_000,
                 "320_cuoi": 5_000_000_000,
                 "330_cuoi": 4_000_000_000,
                 "338_cuoi": 3_000_000_000,
@@ -2120,6 +2121,9 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertIn("'BCHDKD'!", str(ws_rr["J5"].value))
             self.assertEqual(ws_rr["E5"].value, "=C5-D5")
             self.assertIn("F5/E5", str(ws_rr["K5"].value))
+            # Kiểm tra Bảng 2: Cột I = Phải trả NLĐ [314] từ BCTC, Cột J = Tổng TNCT TNCN (C84+C86+C88)
+            self.assertIn("'BCTC'!", str(ws_rr["I10"].value))
+            self.assertEqual(ws_rr["J10"].value, "='2023'!C84+'2023'!C86+'2023'!C88")
 
             # Kiểm tra công thức trên GDLK_30EBITDA (LCTTGT khấu hao = 400tr, LN thuần & Lãi vay link sang 'BCHDKD'!)
             ws_gd = wb["GDLK_30EBITDA"]
