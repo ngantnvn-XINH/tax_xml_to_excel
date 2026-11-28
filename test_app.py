@@ -2263,6 +2263,51 @@ class TestTaxXmlToExcel(unittest.TestCase):
         # 2023 = 50tr + 10tr = 60tr
         self.assertEqual(round(m["tncn_tk_th_tq_by_ky"][2023]), 60_000_000)
 
+    def test_v16_ntnn_same_mst_ky_lan_dedup_keeps_only_one_in_cuoi(self) -> None:
+        """Kiểm thử v1.6: Tờ khai NTNN trùng (cùng kỳ, lần, số thuế dù khác ngày lập/khác MST; hoặc kỳ tháng trùng MST+kỳ+lần) chỉ ghi chú trùng ở TH và loại bỏ khỏi So Thue NTNN Cuoi (chỉ lấy 1 bản mới nhất)."""
+        from ntnn_exporter import filter_latest_ntnn_declarations, find_ntnn_duplicates
+        from tax_parser import TaxDeclaration
+
+        # 1. Lần phát sinh: 2 bản cùng ngày 15/06/2023, cùng lần 0, cùng số thuế 5tr (khác ngày lập / khác dt_chua_gtgt) -> chỉ giữ 1 bản mới nhất!
+        d_old = TaxDeclaration(
+            file_path="ntnn_1506_v1.xml", file_name="ntnn_1506_v1.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ten_nnt="CTY TEST", ky_kkhai="15/06/2023",
+            tu_ngay=datetime.date(2023, 6, 15), den_ngay=datetime.date(2023, 6, 15),
+            ngay_lap=datetime.date(2023, 6, 15), so_lan="0",
+            indicators={"_kieu_ky": "D", "_ntnn_dt_chua_gtgt": 0, "_ntnn_thue_tndn": 5_000_000},
+        )
+        d_new = TaxDeclaration(
+            file_path="ntnn_1506_v2.xml", file_name="ntnn_1506_v2.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ten_nnt="CTY TEST", ky_kkhai="15/06/2023",
+            tu_ngay=datetime.date(2023, 6, 15), den_ngay=datetime.date(2023, 6, 15),
+            ngay_lap=datetime.date(2023, 6, 18), so_lan="0",
+            indicators={"_kieu_ky": "D", "_ntnn_dt_chua_gtgt": 100_000_000, "_ntnn_thue_tndn": 5_000_000},
+        )
+        dups = find_ntnn_duplicates([d_old, d_new])
+        self.assertIn(id(d_old), dups)
+        self.assertNotIn(id(d_new), dups)
+        kept = filter_latest_ntnn_declarations([d_old, d_new])
+        self.assertEqual([d.file_name for d in kept], ["ntnn_1506_v2.xml"])
+
+        # 2. Kỳ tháng: 2 bản cùng MST + kỳ 07/2023 + cùng lần 0 (dù số tiền khác) -> loại bản cũ, giữ 1 bản mới nhất!
+        m_old = TaxDeclaration(
+            file_path="ntnn_0723_v1.xml", file_name="ntnn_0723_v1.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ten_nnt="CTY TEST", ky_kkhai="07/2023",
+            tu_ngay=datetime.date(2023, 7, 1), den_ngay=datetime.date(2023, 7, 31),
+            ngay_lap=datetime.date(2023, 8, 10), so_lan="0",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_chua_gtgt": 100_000_000, "_ntnn_thue_tndn": 5_000_000},
+        )
+        m_new = TaxDeclaration(
+            file_path="ntnn_0723_v2.xml", file_name="ntnn_0723_v2.xml", tax_type="NTNN", ma_tkhai="01/NTNN",
+            mst="0100000099", ten_nnt="CTY TEST", ky_kkhai="07/2023",
+            tu_ngay=datetime.date(2023, 7, 1), den_ngay=datetime.date(2023, 7, 31),
+            ngay_lap=datetime.date(2023, 8, 15), so_lan="0",
+            indicators={"_kieu_ky": "M", "_ntnn_dt_chua_gtgt": 104_000_000, "_ntnn_thue_tndn": 5_200_000},
+        )
+        dups_m = find_ntnn_duplicates([m_old, m_new])
+        self.assertIn(id(m_old), dups_m)
+        self.assertEqual([d.file_name for d in filter_latest_ntnn_declarations([m_old, m_new])], ["ntnn_0723_v2.xml"])
+
 
 if __name__ == "__main__":
     unittest.main()

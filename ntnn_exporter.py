@@ -543,22 +543,65 @@ def _ntnn_content_fingerprint(d: TaxDeclaration) -> Tuple[Any, ...]:
 
 def find_ntnn_duplicates(declarations: List[TaxDeclaration]) -> Dict[int, str]:
     """
-    Phát hiện các tờ khai NTNN cùng kỳ và trùng y như nhau về số liệu (kể cả trùng chéo giữa
-    thư mục MST công ty chính và thư mục MST nhà thầu riêng).
-    Trả về dict {id(d): thông_báo_trùng} cho các bản bị trùng (bản đầu tiên được giữ là Hợp lệ).
+    Phát hiện toàn bộ tờ khai NTNN bị trùng (để ghi chú trên 'So Thue NTNN TH' / 'Tong_Hop' và
+    LOẠI KHỎI 'So Thue NTNN Cuoi' — chỉ lấy đúng 01 tờ khai hợp lệ để lên biểu khớp QHNS):
+    1. Trùng y như nhau về kỳ + số liệu (kể cả trùng chéo giữa MST công ty chính và MST nhà thầu).
+    2. Trùng kỳ + cùng lần nộp + cùng ngày lập + cùng số thuế GTGT & TNDN (khi có số thuế > 0).
+    3. Cùng (MST, kỳ kê khai chuẩn hóa, số lần) — VD tải trùng/nộp lại cùng 1 tờ khai Chính thức (so_lan=0)
+       trong cùng ngày/tháng: giữ đúng 01 bản mới nhất theo ngày lập, loại bản trùng cũ hơn.
+    (Lưu ý: Với tờ khai theo lần phát sinh, bản Chính thức so_lan=0 và bản Bổ sung so_lan=1 có số liệu KHÁC nhau
+     có khác số lần nên vẫn được giữ và cộng đủ.)
+    Trả về dict {id(d): thông_báo_trùng} cho các bản bị trùng.
     """
-    sorted_decls = sorted(declarations, key=_sort_key_ntnn)
-    seen: Dict[Tuple[Any, ...], TaxDeclaration] = {}
+    # Sắp xếp ưu tiên bản mới nhất (ngay_lap lớn nhất) đứng trước khi cùng (MST, kỳ, số lần)
+    def _dedup_priority(d: TaxDeclaration) -> Tuple[int, datetime.date, str, int, int, str]:
+        yr = d.year or (d.tu_ngay.year if d.tu_ngay else (d.ngay_lap.year if d.ngay_lap else 0))
+        tn = d.tu_ngay or datetime.date.min
+        try:
+            lan = int(d.so_lan) if d.so_lan not in (None, "") else 0
+        except (ValueError, TypeError):
+            lan = 0
+        nl_ord = -(d.ngay_lap.toordinal()) if d.ngay_lap else 0
+        return (yr, tn, d.ky_kkhai or "", lan, nl_ord, d.file_name or "")
+
+    sorted_decls = sorted(declarations, key=_dedup_priority)
+    seen_fp: Dict[Tuple[Any, ...], TaxDeclaration] = {}
+    seen_tax_sig: Dict[Tuple[Any, ...], TaxDeclaration] = {}
+    seen_mst_ky_lan: Dict[Tuple[str, str, int], TaxDeclaration] = {}
     dup_notes: Dict[int, str] = {}
+
     for d in sorted_decls:
         fp = _ntnn_content_fingerprint(d)
-        # Chỉ báo trùng chéo khi có số liệu thực (tránh báo trùng các tờ khai trắng 0 đồng khác kỳ)
-        if fp in seen:
-            orig = seen[fp]
+        ky_norm = _normalize_ntnn_ky(d)
+        m = get_ntnn_metrics(d)
+        try:
+            lan_int = int(d.so_lan) if d.so_lan not in (None, "") else 0
+        except (ValueError, TypeError):
+            lan_int = 0
+
+        mst_ky_lan = (d.mst or "", ky_norm, lan_int)
+        # Cùng kỳ + cùng lần nộp + cùng số thuế GTGT & TNDN (kể cả khác ngày lập / khác MST / lệch dt_chua_gtgt) -> chắc chắn trùng!
+        tax_sig = (ky_norm, lan_int, round(m["thue_gtgt"]), round(m["thue_tndn"]))
+        has_tax = (round(m["thue_gtgt"]) != 0 or round(m["thue_tndn"]) != 0)
+        is_periodic = not is_ntnn_per_occurrence(d)
+
+        orig: Optional[TaxDeclaration] = None
+        if fp in seen_fp:
+            orig = seen_fp[fp]
+        elif has_tax and tax_sig in seen_tax_sig:
+            orig = seen_tax_sig[tax_sig]
+        elif is_periodic and mst_ky_lan in seen_mst_ky_lan:
+            orig = seen_mst_ky_lan[mst_ky_lan]
+
+        if orig is not None:
             mst_info = f"MST {orig.mst}" if orig.mst else ""
             dup_notes[id(d)] = f"TRÙNG TỜ KHAI với {orig.file_name} ({mst_info}) - Đã loại khỏi NTNN Cuoi"
         else:
-            seen[fp] = d
+            seen_fp[fp] = d
+            if has_tax:
+                seen_tax_sig[tax_sig] = d
+            if is_periodic:
+                seen_mst_ky_lan[mst_ky_lan] = d
     return dup_notes
 
 
