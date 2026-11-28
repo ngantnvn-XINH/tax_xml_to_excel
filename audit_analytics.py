@@ -212,20 +212,20 @@ def write_sheet_kiem_soat_gtgt(
     al_l = Alignment(horizontal="left", vertical="center", wrap_text=True)
     al_r = Alignment(horizontal="right", vertical="center")
 
-    ws.merge_cells("A1:Q1")
+    ws.merge_cells("A1:U1")
     ws["A1"] = "BẢNG KIỂM SOÁT CHUYỂN KỲ & PHÂN BỔ THUẾ GTGT ĐẦU VÀO THEO TỪNG KỲ KÊ KHAI"
     ws["A1"].font = f_title
     ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
     ws.row_dimensions[1].height = 24
 
-    ws.merge_cells("A2:Q2")
+    ws.merge_cells("A2:U2")
     ws["A2"] = (
-        f"Nguồn liên kết tự động từ sheet '{src_sheet}'. "
-        "Cột 'Sai đầu kỳ' tự đánh dấu X khi [22] kỳ này khác [43] kỳ liền trước; "
-        "cột 'Cảnh báo phân bổ' tự báo khi kỳ có doanh thu không chịu thuế [26] > 0 nhưng khấu trừ 100% đầu vào ([25]=[24])."
+        f"Nguồn: '{src_sheet}'. Phân bổ đầu vào dùng chung theo K2 Đ14 TT 219/2013 & K9 Đ1 TT 26/2015: "
+        "Tỷ lệ được KT = (DT chịu thuế [27] + DT KKT [32a]) / Tổng DT [34] = ([34]-[26])/[34] "
+        "(lưu ý tách riêng đầu vào chuyên dùng nếu DN hạch toán riêng & phân bổ lại cả năm dương lịch tại kỳ cuối năm)."
     )
     ws["A2"].font = f_sub
-    ws.row_dimensions[2].height = 18
+    ws.row_dimensions[2].height = 26
 
     headers = [
         "STT",
@@ -245,8 +245,12 @@ def write_sheet_kiem_soat_gtgt(
         "Điều chỉnh tăng\nkỳ trước [38]",
         "Thuế GTGT phải nộp\ntrong kỳ [40]",
         "Thuế GTGT khấu trừ\nchuyển kỳ sau [43]",
+        "Tỷ lệ được KT\n(([34]-[26])/[34])",
+        "Thuế ĐV được KT\ntheo phân bổ",
+        "Thuế ĐV không KT\ntheo phân bổ",
+        "Chênh lệch phân bổ\n([25] - Được KT)",
     ]
-    ws.row_dimensions[3].height = 34
+    ws.row_dimensions[3].height = 36
     for ci, h in enumerate(headers, start=1):
         c = ws.cell(3, ci, h)
         c.font = f_hdr
@@ -254,7 +258,19 @@ def write_sheet_kiem_soat_gtgt(
         c.alignment = al_c
         c.border = b_thin
 
-    widths = [6, 11, 8, 17, 17, 10, 17, 18, 17, 13, 17, 17, 18, 15, 15, 17, 17]
+    ws.cell(3, 18).comment = Comment(
+        "Theo K9 Đ1 TT 26/2015/TT-BTC: Doanh thu không phải kê khai, tính nộp thuế [32a] ĐƯỢC cộng vào tử số "
+        "cùng doanh thu chịu thuế [27]. Vì [34] = [26] + [27] + [32a] nên ([34] - [26]) / [34] = ([27] + [32a]) / [34].",
+        "tax_xml_to_excel",
+    )
+    ws.cell(3, 21).comment = Comment(
+        "Chênh lệch = [25] NNT đã kê khai khấu trừ − Thuế ĐV được KT theo tỷ lệ phân bổ.\n"
+        "• Số dương (> 0): NNT có rủi ro khấu trừ thừa thuế GTGT đầu vào (cần đối chiếu đầu vào dùng chung & điều chỉnh giảm).\n"
+        "• Cuối năm dương lịch (T12/Q4): bắt buộc tính phân bổ lại theo tỷ lệ doanh thu cả năm.",
+        "tax_xml_to_excel",
+    )
+
+    widths = [6, 11, 8, 17, 17, 10, 17, 18, 17, 13, 17, 17, 18, 15, 15, 17, 17, 15, 17, 17, 18]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.freeze_panes = "D4"
@@ -286,24 +302,33 @@ def write_sheet_kiem_soat_gtgt(
         ws.cell(cur_r, 15, f"={ref}!AE{src_r}")
         ws.cell(cur_r, 16, f"={ref}!AJ{src_r}")
         ws.cell(cur_r, 17, f"={ref}!AM{src_r}")
+        # Phân bổ đầu vào dùng chung chuẩn K2 Đ14 TT 219/2013 & K9 Đ1 TT 26/2015:
+        # Tỷ lệ được KT = ([34]-[26])/[34] (tử số đã bao gồm DT chịu thuế [27] + DT KKT [32a])
+        ws.cell(cur_r, 18, f"=IF(I{cur_r}>0,IF(H{cur_r}>0,MAX(0,(H{cur_r}-I{cur_r})/H{cur_r}),0),1)")
+        ws.cell(cur_r, 19, f"=IF(I{cur_r}>0,ROUND(K{cur_r}*R{cur_r},0),L{cur_r})")
+        ws.cell(cur_r, 20, f"=IF(I{cur_r}>0,MAX(0,K{cur_r}-S{cur_r}),0)")
+        ws.cell(cur_r, 21, f"=IF(I{cur_r}>0,L{cur_r}-S{cur_r},0)")
 
         # Kiểm tra nhanh giá trị thực để tô nổi bật ngay các ô bị sai đầu kỳ hoặc cần KT phân bổ
         v22 = _to_float(ws_src.cell(src_r, 12).value)
         v43_prev = v22 if idx == 1 else _to_float(ws_src.cell(period_rows[idx - 2], 39).value)
         has_dk_err = abs(v22 - v43_prev) > 1
+        v34 = _to_float(ws_src.cell(src_r, 27).value)
         v26 = _to_float(ws_src.cell(src_r, 18).value)
         v24 = _to_float(ws_src.cell(src_r, 14).value)
         v25 = _to_float(ws_src.cell(src_r, 17).value)
         has_alloc_warn = (v26 > 0 and v24 > 0 and abs(v24 - v25) <= 1)
+        est_allow = round(v24 * max(0.0, (v34 - v26) / v34)) if (v26 > 0 and v34 > 0) else v25
+        has_alloc_diff = (v26 > 0 and (v25 - est_allow) > 1)
 
-        for ci in range(1, 18):
+        for ci in range(1, 22):
             c = ws.cell(cur_r, ci)
             c.font = f_reg
             c.border = b_thin
-            if ci in (4, 5, 7, 8, 9, 11, 12, 14, 15, 16, 17):
+            if ci in (4, 5, 7, 8, 9, 11, 12, 14, 15, 16, 17, 19, 20, 21):
                 c.number_format = "#,##0"
                 c.alignment = al_r
-            elif ci == 10:
+            elif ci in (10, 18):
                 c.number_format = "0.00%"
                 c.alignment = al_r
             if has_dk_err and ci in (6, 7):
@@ -312,12 +337,15 @@ def write_sheet_kiem_soat_gtgt(
             if has_alloc_warn and ci in (9, 10, 13):
                 c.font = f_warn
                 c.fill = fill_warn
+            if has_alloc_diff and ci in (20, 21):
+                c.font = f_warn
+                c.fill = fill_warn
         cur_r += 1
 
     r_end = cur_r - 1
     ws.cell(cur_r, 2, "TỔNG CỘNG").alignment = al_c
     ws.cell(cur_r, 6, f'=COUNTIF(F{r_start}:F{r_end},"X")&" kỳ"').alignment = al_c
-    for ci in (7, 8, 9, 11, 12, 14, 15, 16):
+    for ci in (7, 8, 9, 11, 12, 14, 15, 16, 19, 20, 21):
         col_l = get_column_letter(ci)
         c = ws.cell(cur_r, ci, f"=SUM({col_l}{r_start}:{col_l}{r_end})")
         c.number_format = "#,##0"
@@ -325,13 +353,16 @@ def write_sheet_kiem_soat_gtgt(
     c_pct = ws.cell(cur_r, 10, f"=IF(H{cur_r}>0,I{cur_r}/H{cur_r},0)")
     c_pct.number_format = "0.00%"
     c_pct.alignment = al_r
+    c_allow_pct = ws.cell(cur_r, 18, f"=IF(I{cur_r}>0,IF(H{cur_r}>0,MAX(0,(H{cur_r}-I{cur_r})/H{cur_r}),0),1)")
+    c_allow_pct.number_format = "0.00%"
+    c_allow_pct.alignment = al_r
     ws.cell(cur_r, 13, f'=COUNTIF(M{r_start}:M{r_end},"Cần KT phân bổ")&" kỳ"').alignment = al_c
-    for ci in range(1, 18):
+    for ci in range(1, 22):
         c = ws.cell(cur_r, ci)
         c.font = f_bold
         c.fill = fill_tot
         c.border = b_thin
-    ws.auto_filter.ref = f"A3:Q{r_end}"
+    ws.auto_filter.ref = f"A3:U{r_end}"
     return ws
 
 

@@ -2105,6 +2105,11 @@ class TestTaxXmlToExcel(unittest.TestCase):
             self.assertIn("IF(ABS(D5-E5)>1", str(ws_ks["F5"].value))
             self.assertEqual(ws_ks["G5"].value, "=D5-E5")
             self.assertIn("Cần KT phân bổ", str(ws_ks["M5"].value))
+            # Kiểm tra 4 cột phân bổ GTGT đầu vào chuẩn TT 219/2013 & TT 26/2015 (cột R..U)
+            self.assertEqual(ws_ks["R5"].value, "=IF(I5>0,IF(H5>0,MAX(0,(H5-I5)/H5),0),1)")
+            self.assertEqual(ws_ks["S5"].value, "=IF(I5>0,ROUND(K5*R5,0),L5)")
+            self.assertEqual(ws_ks["T5"].value, "=IF(I5>0,MAX(0,K5-S5),0)")
+            self.assertEqual(ws_ks["U5"].value, "=IF(I5>0,L5-S5,0)")
 
             # Kiểm tra công thức trên PhanTich_RuiRo (phải link thực sự sang 'BCHDKD' cho TT80 [04], [13], [14], [15], KHÔNG bị 0!)
             ws_rr = wb["PhanTich_RuiRo"]
